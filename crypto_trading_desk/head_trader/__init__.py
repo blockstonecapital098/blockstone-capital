@@ -1,0 +1,1 @@
+# Head‑Trader package initializer
