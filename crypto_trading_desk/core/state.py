@@ -8,7 +8,11 @@ import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
-STATE_FILE = os.path.join(os.getcwd(), "portfolio_state.json")
+
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    STATE_FILE = "/tmp/portfolio_state.json"
+else:
+    STATE_FILE = os.path.join(os.getcwd(), "portfolio_state.json")
 
 
 def save_state(portfolio: Any) -> None:

@@ -73,14 +73,17 @@ async def lifespan(app: FastAPI):
     from crypto_trading_desk.core.state import load_state, save_state
     load_state(portfolio)
 
-    from crypto_trading_desk.execution.auto_trader import AutonomousTradingEngine
-    auto_trader = AutonomousTradingEngine(app.state)
-    auto_trader.start()
-    app.state.auto_trader = auto_trader
+    auto_trader = None
+    if not os.environ.get("VERCEL"):
+        from crypto_trading_desk.execution.auto_trader import AutonomousTradingEngine
+        auto_trader = AutonomousTradingEngine(app.state)
+        auto_trader.start()
+        app.state.auto_trader = auto_trader
 
     yield  # Application runs here
 
-    auto_trader.stop()
+    if auto_trader:
+        auto_trader.stop()
     save_state(portfolio)
     logger.info("Trading Desk API shutting down …")
     await exchange_adapter.close()
