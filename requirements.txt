@@ -1,27 +1,10 @@
-# Core Framework
 fastapi>=0.111.0
-uvicorn[standard]>=0.29.0
+uvicorn>=0.29.0
 pydantic>=2.7.0
 pydantic-settings>=2.2.0
-
-# Database (SQLite for cloud — no external DB needed)
-sqlalchemy[asyncio]>=2.0.29
+sqlalchemy>=2.0.29
 aiosqlite>=0.20.0
-
-# Market Data
-ccxt>=4.3.0
 httpx>=0.27.0
-websockets>=12.0
-
-# Technical Analysis
 pandas>=2.2.2
 numpy>=1.26.4
-pandas-ta>=0.3.14b
-
-# Scheduling
-apscheduler>=3.10.4
-
-# Utilities
-python-dotenv>=1.0.1
-structlog>=24.1.0
-tenacity>=8.3.0
+ccxt>=4.3.0

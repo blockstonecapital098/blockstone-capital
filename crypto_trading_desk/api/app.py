@@ -114,16 +114,12 @@ def create_app() -> FastAPI:
     app.include_router(binance_live.router, prefix="/api/binance", tags=["binance"])
 
     from fastapi.responses import HTMLResponse
-    import os
+    from crypto_trading_desk.api.templates.template import DASHBOARD_HTML
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/dashboard", response_class=HTMLResponse)
     async def get_ui_dashboard():
-        template_path = os.path.join(os.path.dirname(__file__), "templates", "dashboard.html")
-        if os.path.exists(template_path):
-            with open(template_path, "r", encoding="utf-8") as f:
-                return HTMLResponse(content=f.read())
-        return HTMLResponse(content="<h1>Trading Desk API Operational</h1><p>Visit /docs for API endpoints.</p>")
+        return HTMLResponse(content=DASHBOARD_HTML)
 
     @app.get("/health")
     async def health():
