@@ -1,9 +1,11 @@
 """
 Application settings loaded from environment variables using Pydantic BaseSettings.
+Robust against empty strings and missing cloud environment variables.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Any
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,3 +43,30 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+
+    @field_validator("trading_mode", mode="before")
+    @classmethod
+    def validate_trading_mode(cls, v: Any) -> str:
+        if not v or not str(v).strip():
+            return "paper"
+        val = str(v).strip().lower()
+        return val if val in ("paper", "live") else "paper"
+
+    @field_validator("binance_testnet", mode="before")
+    @classmethod
+    def validate_binance_testnet(cls, v: Any) -> bool:
+        if v is None or not str(v).strip():
+            return True
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes", "t")
+        return bool(v)
+
+    @field_validator("initial_equity", mode="before")
+    @classmethod
+    def validate_initial_equity(cls, v: Any) -> float:
+        if v is None or not str(v).strip():
+            return 1000.0
+        try:
+            return float(v)
+        except Exception:
+            return 1000.0
