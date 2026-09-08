@@ -30,5 +30,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Docker volumes
-data/
+# Docker volumes (root only)
+/data/
+!crypto_trading_desk/data/
