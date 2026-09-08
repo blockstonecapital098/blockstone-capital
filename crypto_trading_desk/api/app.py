@@ -88,9 +88,9 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Crypto Multi‑Agent Trading Desk",
+        title="Blockstone Capital AI Trading Desk",
         version="1.0.0",
-        description="Institutional‑grade crypto trading desk powered by multiple AI agents.",
+        description="Institutional-grade crypto trading desk powered by multiple AI agents.",
         lifespan=lifespan,
     )
     app.add_middleware(
