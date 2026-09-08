@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 
 from crypto_trading_desk.core.models import TradeProposal
 from crypto_trading_desk.data.live_price import get_live_price
+from crypto_trading_desk.core.state import save_state
 
 router = APIRouter()
 
@@ -85,6 +86,7 @@ async def trigger_simulated_trade(request: Request, symbol: str = "BTC/USDT", si
     portfolio.total_exposure += notional
 
     await event_bus.publish(proposal)
+    save_state(portfolio)
 
     return {
         "status": "success",
@@ -148,6 +150,7 @@ async def close_all_positions(request: Request, reason: str = "Manual Close"):
     if hasattr(portfolio, "_entry_prices"):
         portfolio._entry_prices.clear()
 
+    save_state(portfolio)
     return {"status": "success", "message": f"Closed {closed_count} open position(s). Realized P&L updated."}
 
 
@@ -171,4 +174,5 @@ async def reset_all_history(request: Request):
     if hasattr(oms, "_orders"):
         oms._orders.clear()
 
+    save_state(portfolio)
     return {"status": "success", "message": "All previous trades & history cleared. Reset to $1,000.00 USDT."}

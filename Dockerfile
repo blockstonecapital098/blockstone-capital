@@ -9,8 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY . .
 
-# Expose FastAPI port
+# Expose default port
 EXPOSE 8000
 
-# Start the application
-CMD ["uvicorn", "crypto_trading_desk.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start the application dynamically evaluating $PORT (works on Render, Railway, Koyeb, Docker)
+CMD ["sh", "-c", "uvicorn crypto_trading_desk.api.app:app --host 0.0.0.0 --port ${PORT:-8000}"]

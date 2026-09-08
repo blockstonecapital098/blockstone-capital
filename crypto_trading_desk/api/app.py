@@ -70,6 +70,9 @@ async def lifespan(app: FastAPI):
     app.state.alert_manager = alert_manager
     app.state.settings = settings
 
+    from crypto_trading_desk.core.state import load_state, save_state
+    load_state(portfolio)
+
     from crypto_trading_desk.execution.auto_trader import AutonomousTradingEngine
     auto_trader = AutonomousTradingEngine(app.state)
     auto_trader.start()
@@ -78,6 +81,7 @@ async def lifespan(app: FastAPI):
     yield  # Application runs here
 
     auto_trader.stop()
+    save_state(portfolio)
     logger.info("Trading Desk API shutting down …")
     await exchange_adapter.close()
 
