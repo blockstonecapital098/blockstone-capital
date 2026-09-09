@@ -75,6 +75,7 @@ async def lifespan(app: FastAPI):
     load_state(portfolio)
 
     auto_trader = None
+    app.state.auto_trader_enabled = True  # Autopilot on by default
     if not os.environ.get("VERCEL"):
         from crypto_trading_desk.execution.auto_trader import AutonomousTradingEngine
         auto_trader = AutonomousTradingEngine(app.state)
@@ -103,6 +104,22 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Attach shared objects to app.state immediately so they are available without lifespan
+    app.state.event_bus = event_bus
+    app.state.portfolio = portfolio
+    app.state.emergency = emergency
+    app.state.oms = oms
+    app.state.perf_tracker = perf_tracker
+    app.state.postmortem_gen = postmortem_gen
+    app.state.daily_report = daily_report
+    app.state.alert_manager = alert_manager
+    app.state.settings = settings
+    app.state.auto_trader_enabled = True
+
+    from crypto_trading_desk.core.state import load_state
+    load_state(portfolio)
+
     # Mount routers
     app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
     app.include_router(trades.router, prefix="/api/trades", tags=["trades"])
@@ -113,6 +130,9 @@ def create_app() -> FastAPI:
 
     from crypto_trading_desk.api.routes import binance_live
     app.include_router(binance_live.router, prefix="/api/binance", tags=["binance"])
+
+    from crypto_trading_desk.api.routes import scan
+    app.include_router(scan.router, prefix="/api/scan", tags=["scan"])
 
     from fastapi.responses import HTMLResponse
     from crypto_trading_desk.api.templates.template import DASHBOARD_HTML

@@ -16,6 +16,7 @@ env/
 
 # Local state file (portfolio data — managed at runtime)
 state.json
+portfolio_state.json
 trading.db
 
 # Logs
