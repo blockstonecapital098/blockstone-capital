@@ -8,6 +8,7 @@ Startup and shutdown hooks manage async resources (DB, market data, exchange).
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
