@@ -126,19 +126,6 @@ def create_app() -> FastAPI:
     async def health():
         return {"status": "ok", "trading_mode": settings.trading_mode}
 
-    # DEBUG: catch-all to see what path Vercel sends
-    from fastapi import Request
-    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-    async def debug_catch_all(request: Request, full_path: str):
-        return {
-            "debug": True,
-            "full_path": full_path,
-            "url": str(request.url),
-            "scope_path": request.scope.get("path"),
-            "root_path": request.scope.get("root_path"),
-            "headers_host": request.headers.get("host"),
-        }
-
     return app
 
 
