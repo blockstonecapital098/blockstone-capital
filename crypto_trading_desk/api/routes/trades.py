@@ -96,6 +96,71 @@ async def trigger_simulated_trade(request: Request, symbol: str = "BTC/USDT", si
     }
 
 
+@router.post("/close")
+@router.post("/close/")
+@router.post("/close/{symbol:path}")
+async def close_single_position(request: Request, symbol: str | None = None, reason: str = "Manual Close"):
+    from urllib.parse import unquote
+    portfolio = request.app.state.portfolio
+
+    # Extract symbol from query parameter if empty or path is root
+    if not symbol or symbol in ("", "/"):
+        symbol = request.query_params.get("symbol", "")
+    symbol = unquote(symbol).strip()
+
+    # Normalize symbol format (e.g. BTCUSDT -> BTC/USDT)
+    if "/" not in symbol and symbol.endswith("USDT"):
+        symbol = f"{symbol[:-4]}/USDT"
+
+    if not hasattr(portfolio, "closed_trades"):
+        portfolio.closed_trades = []
+    if not hasattr(portfolio, "realized_pnl"):
+        portfolio.realized_pnl = 0.0
+
+    now_pkt = datetime.now(PKT_TZ).strftime("%b %d, %Y %I:%M:%S %p")
+    qty = portfolio.positions.get(symbol, 0)
+    if qty != 0:
+        live_price = await get_live_price(symbol)
+        entry_price = getattr(portfolio, "_entry_prices", {}).get(symbol, live_price)
+        leverage = 10
+        margin = 50.0
+
+        if qty > 0:  # Long
+            price_diff_pct = (live_price - entry_price) / entry_price
+            realized_pnl = margin * leverage * price_diff_pct
+            sl = entry_price * 0.98
+            tp = entry_price * 1.04
+        else:  # Short
+            price_diff_pct = (entry_price - live_price) / entry_price
+            realized_pnl = margin * leverage * price_diff_pct
+            sl = entry_price * 1.02
+            tp = entry_price * 0.96
+
+        pnl_pct = (realized_pnl / margin) * 100.0
+        portfolio.realized_pnl += realized_pnl
+
+        portfolio.closed_trades.append({
+            "trade_id": str(uuid.uuid4())[:8],
+            "closed_at": now_pkt,
+            "symbol": symbol,
+            "side": "LONG" if qty > 0 else "SHORT",
+            "leverage": f"{leverage}x",
+            "entry_price": round(entry_price, 2),
+            "exit_price": round(live_price, 2),
+            "sl_tp": f"${sl:,.2f} / ${tp:,.2f}",
+            "realized_pnl": round(realized_pnl, 2),
+            "pnl_pct": round(pnl_pct, 2),
+            "closed_by": reason,
+        })
+
+        portfolio.positions[symbol] = 0
+        portfolio.total_exposure = max(0.0, portfolio.total_exposure - 500.0)
+        save_state(portfolio)
+        return {"status": "success", "message": f"Closed {symbol} position. Realized P&L: ${realized_pnl:.2f}"}
+
+    return {"status": "warning", "message": f"No open position found for {symbol}."}
+
+
 @router.post("/close-all")
 @router.post("/close-all/")
 async def close_all_positions(request: Request, reason: str = "Manual Close"):
