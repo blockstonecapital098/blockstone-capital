@@ -128,13 +128,8 @@ async def close_single_position(request: Request, symbol: str | None = None, rea
         if qty > 0:  # Long
             price_diff_pct = (live_price - entry_price) / entry_price
             realized_pnl = margin * leverage * price_diff_pct
-            sl = entry_price * 0.98
-            tp = entry_price * 1.04
-        else:  # Short
-            price_diff_pct = (entry_price - live_price) / entry_price
-            realized_pnl = margin * leverage * price_diff_pct
-            sl = entry_price * 1.02
-            tp = entry_price * 0.96
+            sl = entry_price * 0.996 if qty > 0 else entry_price * 1.004
+            tp = entry_price * 1.006 if qty > 0 else entry_price * 0.994
 
         pnl_pct = (realized_pnl / margin) * 100.0
         portfolio.realized_pnl += realized_pnl
@@ -184,13 +179,12 @@ async def close_all_positions(request: Request, reason: str = "Manual Close"):
             if qty > 0: # Long
                 price_diff_pct = (live_price - entry_price) / entry_price
                 realized_pnl = margin * leverage * price_diff_pct
-                sl = entry_price * 0.98
-                tp = entry_price * 1.04
             else: # Short
                 price_diff_pct = (entry_price - live_price) / entry_price
                 realized_pnl = margin * leverage * price_diff_pct
-                sl = entry_price * 1.02
-                tp = entry_price * 0.96
+
+            sl = entry_price * 0.996 if qty > 0 else entry_price * 1.004
+            tp = entry_price * 1.006 if qty > 0 else entry_price * 0.994
 
             pnl_pct = (realized_pnl / margin) * 100.0
             portfolio.realized_pnl += realized_pnl

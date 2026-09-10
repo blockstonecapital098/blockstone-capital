@@ -55,8 +55,8 @@ async def get_dashboard(request: Request):
                 "current_price": round(live_price, 2),
                 "liq_price": round(liq_price, 2),
                 "distance_to_liq": f"{distance_to_liq_pct:.1f}%",
-                "stop_loss": round(entry_price * 0.98 if qty > 0 else entry_price * 1.02, 2),
-                "take_profit": round(entry_price * 1.04 if qty > 0 else entry_price * 0.96, 2),
+                "stop_loss": round(entry_price * 0.996 if qty > 0 else entry_price * 1.004, 2),
+                "take_profit": round(entry_price * 1.006 if qty > 0 else entry_price * 0.994, 2),
                 "unrealized_pnl": round(unrealized_pnl, 2),
                 "pnl_pct": round(pnl_pct, 2)
             })

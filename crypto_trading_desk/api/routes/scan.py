@@ -77,16 +77,16 @@ async def run_scan_tick(request: Request):
             pnl_pct = (realized_pnl / margin) * 100.0
 
             closed_reason = None
-            if price_diff_pct >= 0.04:
-                closed_reason = "AI TakeProfit (+4%)"
-            elif price_diff_pct <= -0.02:
-                closed_reason = "AI StopLoss (-2%)"
+            if price_diff_pct >= 0.006:
+                closed_reason = f"AI Scalp TakeProfit (+{price_diff_pct*100:.1f}%)"
+            elif price_diff_pct <= -0.004:
+                closed_reason = f"AI Scalp StopLoss ({price_diff_pct*100:.1f}%)"
 
             if closed_reason:
                 portfolio.positions[sym] = 0
                 portfolio.realized_pnl += realized_pnl
-                sl = entry_p * 0.98 if qty > 0 else entry_p * 1.02
-                tp = entry_p * 1.04 if qty > 0 else entry_p * 0.96
+                sl = entry_p * 0.996 if qty > 0 else entry_p * 1.004
+                tp = entry_p * 1.006 if qty > 0 else entry_p * 0.994
 
                 portfolio.closed_trades.append({
                     "trade_id": str(uuid.uuid4())[:8],
