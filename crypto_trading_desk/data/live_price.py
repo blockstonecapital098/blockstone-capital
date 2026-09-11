@@ -89,9 +89,12 @@ async def get_live_price(symbol: str = "BTC/USDT") -> float:
 
     # 6. Fallback based on latest market levels if all external APIs fail
     dynamic_fallbacks = {
-        "BTC": 79280.0,
-        "ETH": 2510.0,
-        "SOL": 105.0,
+        "BTC": 77300.0,
+        "ETH": 2470.0,
+        "SOL": 100.0,
+        "TAO": 236.0,
+        "ZEC": 1115.0,
+        "AVAX": 7.5,
         "BNB": 580.0,
         "XRP": 1.45,
         "ADA": 0.65,

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 PKT_TZ = timezone(timedelta(hours=5))
-SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "TAO/USDT", "ZEC/USDT", "AVAX/USDT"]
 
 # Simple rotation counter (persists within warm function instance)
 _scan_state = {"index": 0, "last_scan": 0}
@@ -33,10 +33,10 @@ async def run_scan_tick(request: Request):
     event_bus = request.app.state.event_bus
     settings = request.app.state.settings
 
-    # Throttle: don't scan more than once every 15 seconds
+    # Throttle: don't scan more than once every 10 seconds
     now = time.time()
-    if now - _scan_state["last_scan"] < 15:
-        return {"status": "throttled", "message": "Scan runs every 15s"}
+    if now - _scan_state["last_scan"] < 10:
+        return {"status": "throttled", "message": "Scan runs every 10s"}
     _scan_state["last_scan"] = now
 
     # Check if autopilot / emergency is active
@@ -77,16 +77,16 @@ async def run_scan_tick(request: Request):
             pnl_pct = (realized_pnl / margin) * 100.0
 
             closed_reason = None
-            if price_diff_pct >= 0.006:
-                closed_reason = f"AI Scalp TakeProfit (+{price_diff_pct*100:.1f}%)"
-            elif price_diff_pct <= -0.004:
-                closed_reason = f"AI Scalp StopLoss ({price_diff_pct*100:.1f}%)"
+            if price_diff_pct >= 0.004:
+                closed_reason = f"AI Scalp TakeProfit (+{price_diff_pct*100:.2f}%)"
+            elif price_diff_pct <= -0.003:
+                closed_reason = f"AI Scalp StopLoss ({price_diff_pct*100:.2f}%)"
 
             if closed_reason:
                 portfolio.positions[sym] = 0
                 portfolio.realized_pnl += realized_pnl
-                sl = entry_p * 0.996 if qty > 0 else entry_p * 1.004
-                tp = entry_p * 1.006 if qty > 0 else entry_p * 0.994
+                sl = entry_p * 0.997 if qty > 0 else entry_p * 1.003
+                tp = entry_p * 1.004 if qty > 0 else entry_p * 0.996
 
                 portfolio.closed_trades.append({
                     "trade_id": str(uuid.uuid4())[:8],
@@ -107,19 +107,27 @@ async def run_scan_tick(request: Request):
     # ── 2. Open new positions (max 3 simultaneous) ───────────────────────
     active_pos_count = sum(1 for q in portfolio.positions.values() if q != 0)
     if active_pos_count < 3:
-        symbol = SYMBOLS[_scan_state["index"] % len(SYMBOLS)]
-        _scan_state["index"] += 1
+        # Search across all symbols for an unheld asset
+        for _ in range(len(SYMBOLS)):
+            candidate_sym = SYMBOLS[_scan_state["index"] % len(SYMBOLS)]
+            _scan_state["index"] += 1
+            if portfolio.positions.get(candidate_sym, 0) == 0:
+                symbol = candidate_sym
+                break
+        else:
+            symbol = None
 
-        current_qty = portfolio.positions.get(symbol, 0)
-        if current_qty == 0:
+        if symbol:
             try:
                 live_price = await get_live_price(symbol)
             except Exception as e:
                 return {"status": "error", "message": f"Price fetch failed: {e}"}
 
             side = "buy"
-            qty = 1 if "BTC" in symbol else (3 if "ETH" in symbol else 10)
             notional = 500.0
+            # Dynamic quantity based on $500 position size
+            calc_qty = notional / live_price if live_price > 0 else 1.0
+            qty = max(1, round(calc_qty)) if calc_qty >= 1 else round(calc_qty, 3)
 
             portfolio._entry_prices[symbol] = live_price
             portfolio.positions[symbol] = qty
