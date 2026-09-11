@@ -12,6 +12,11 @@ router = APIRouter()
 @router.get("")
 async def get_dashboard(request: Request):
     portfolio = request.app.state.portfolio
+    try:
+        from crypto_trading_desk.core.state import load_state
+        load_state(portfolio)
+    except Exception:
+        pass
     initial_capital = 1000.00 # Always static $1,000.00 starting equity
 
     if not hasattr(portfolio, "realized_pnl"):

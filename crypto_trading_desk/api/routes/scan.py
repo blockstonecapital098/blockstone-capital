@@ -39,6 +39,12 @@ async def run_scan_tick(request: Request):
         return {"status": "throttled", "message": "Scan runs every 10s"}
     _scan_state["last_scan"] = now
 
+    try:
+        from crypto_trading_desk.core.state import load_state
+        load_state(portfolio)
+    except Exception:
+        pass
+
     # Check if autopilot / emergency is active
     auto_trader = getattr(request.app.state, "auto_trader_enabled", True)
     if not auto_trader:

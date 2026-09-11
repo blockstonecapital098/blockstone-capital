@@ -50,6 +50,11 @@ async def get_trades(request: Request):
 @router.get("/closed/")
 async def get_closed_trades(request: Request):
     portfolio = request.app.state.portfolio
+    try:
+        from crypto_trading_desk.core.state import load_state
+        load_state(portfolio)
+    except Exception:
+        pass
     closed_trades = getattr(portfolio, "closed_trades", [])
     return list(reversed(closed_trades))
 
