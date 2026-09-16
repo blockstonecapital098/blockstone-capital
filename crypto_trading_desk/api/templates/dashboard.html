@@ -695,12 +695,16 @@
                 const closedRes = await fetch('/api/trades/closed');
                 if (closedRes.ok) {
                     const closedTrades = await closedRes.json();
-                    const newClosedHash = JSON.stringify(closedTrades);
+                    // Sort descending: newest closed trade first (Sep 16 → Sep 15 → ...)
+                    const sortedTrades = [...(closedTrades || [])].sort((a, b) => {
+                        return new Date(b.closed_at) - new Date(a.closed_at) || b.trade_id?.localeCompare?.(a.trade_id) || 0;
+                    });
+                    const newClosedHash = JSON.stringify(sortedTrades);
                     if (newClosedHash !== lastClosedHash) {
                         lastClosedHash = newClosedHash;
                         const closedBody = document.getElementById('closedTradesBody');
-                        if (closedTrades && closedTrades.length > 0) {
-                            closedBody.innerHTML = closedTrades.map(c => `
+                        if (sortedTrades && sortedTrades.length > 0) {
+                            closedBody.innerHTML = sortedTrades.map(c => `
                                 <tr>
                                     <td style="color: var(--text-white); font-weight: 700;">${c.closed_at}</td>
                                     <td><b style="font-size: 1.05rem;">${c.symbol}</b></td>
@@ -719,6 +723,7 @@
                         }
                     }
                 }
+
 
                 // 3. Fetch OMS Orders History
                 const tradesRes = await fetch('/api/trades/');
