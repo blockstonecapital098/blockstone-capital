@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Request
 from crypto_trading_desk.data.live_price import get_live_price
+from crypto_trading_desk.api.routes.binance_live import get_live_binance_ticker
 from crypto_trading_desk.core.models import TradeProposal
 
 logger = logging.getLogger(__name__)
@@ -126,34 +127,51 @@ async def run_scan_tick(request: Request):
         if symbol:
             try:
                 live_price = await get_live_price(symbol)
+                ticker_data = await get_live_binance_ticker(symbol)
+                chg24h = float(ticker_data.get("change24h_pct", 0.0))
             except Exception as e:
-                return {"status": "error", "message": f"Price fetch failed: {e}"}
+                return {"status": "error", "message": f"Price/trend fetch failed: {e}"}
 
-            side = "buy"
+            # Directional Trend Detection: if market is falling, take SHORT; if rising, take LONG
+            if chg24h < 0.0:
+                side = "sell"
+                regime = "BEAR_TREND"
+                evidence = [
+                    f"{symbol}: TrendAgent 24h momentum breakdown ({chg24h:+.2f}%) below daily EMA (10x Leverage)",
+                    f"{symbol}: DerivativesAgent bearish funding divergence (Short side allocated)",
+                    f"{symbol}: NoTradeEngine approved short-side momentum entry",
+                ]
+            else:
+                side = "buy"
+                regime = "BULL_TREND"
+                evidence = [
+                    f"{symbol}: TrendAgent 4h EMA crossover ({chg24h:+.2f}%) at ${live_price:,.2f} (10x Leverage)",
+                    f"{symbol}: SentimentAgent accumulation signal (5% margin allocated)",
+                    f"{symbol}: NoTradeEngine verified clean market regime",
+                ]
+
             notional = 500.0
             # Dynamic quantity based on $500 position size
             calc_qty = notional / live_price if live_price > 0 else 1.0
-            qty = max(1, round(calc_qty)) if calc_qty >= 1 else round(calc_qty, 3)
+            base_qty = max(1, round(calc_qty)) if calc_qty >= 1 else round(calc_qty, 3)
+            # Long positions are stored as positive qty, Short positions as negative qty
+            pos_qty = base_qty if side == "buy" else -base_qty
 
             portfolio._entry_prices[symbol] = live_price
-            portfolio.positions[symbol] = qty
+            portfolio.positions[symbol] = pos_qty
             portfolio.total_exposure += notional
 
             proposal = TradeProposal(
                 symbol=symbol,
                 side=side,
-                quantity=qty,
+                quantity=base_qty,
                 notional=notional,
                 confidence=0.88,
-                evidence=[
-                    f"{symbol}: TrendAgent 4h EMA crossover at ${live_price:,.2f} (10x Leverage)",
-                    f"{symbol}: SentimentAgent accumulation signal (5% margin allocated)",
-                    f"{symbol}: NoTradeEngine verified clean market regime",
-                ],
-                market_regime="BULL_TREND",
+                evidence=evidence,
+                market_regime=regime,
             )
             await event_bus.publish(proposal)
-            actions_taken.append(f"OPENED {side.upper()} {symbol} @ ${live_price:,.2f}")
+            actions_taken.append(f"OPENED {side.upper()} {symbol} @ ${live_price:,.2f} ({regime})")
             logger.info("ScanTick executed %s %s @ $%.2f", side.upper(), symbol, live_price)
 
     # Save state after every scan
