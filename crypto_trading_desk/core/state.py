@@ -33,13 +33,12 @@ GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{STATE_PATH}"
 def _get_master_trades() -> list:
     """Load permanent baseline historical trades."""
     try:
-        master_path = os.path.join(os.path.dirname(__file__), "master_trades.json")
-        if os.path.exists(master_path):
-            with open(master_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+        from crypto_trading_desk.core.master_trades import MASTER_CLOSED_TRADES
+        return list(MASTER_CLOSED_TRADES)
     except Exception as exc:
-        logger.warning("Could not load master_trades.json: %s", exc)
+        logger.warning("Could not load master_trades module: %s", exc)
     return []
+
 
 
 def _gh_headers():
