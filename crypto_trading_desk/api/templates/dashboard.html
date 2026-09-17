@@ -691,29 +691,57 @@
                     }
                 }
 
-                // 2. Fetch Closed Trades History
+                // 2. Fetch Closed Trades History (with local persistent cache to prevent history loss across server restarts)
                 const closedRes = await fetch('/api/trades/closed');
                 if (closedRes.ok) {
-                    const closedTrades = await closedRes.json();
-                    // Sort descending: newest closed trade first (Sep 16 → Sep 15 → ...)
-                    const sortedTrades = [...(closedTrades || [])].sort((a, b) => {
-                        return new Date(b.closed_at) - new Date(a.closed_at) || b.trade_id?.localeCompare?.(a.trade_id) || 0;
+                    const incomingTrades = await closedRes.json();
+                    let cachedTrades = [];
+                    try {
+                        cachedTrades = JSON.parse(localStorage.getItem('blockstone_closed_trades') || '[]');
+                    } catch (e) {}
+
+                    // Merge incoming server trades with local cache by trade_id
+                    const tradeMap = new Map();
+                    if (Array.isArray(cachedTrades)) {
+                        cachedTrades.forEach(t => {
+                            const key = t.trade_id || (t.closed_at + (t.symbol || ''));
+                            if (key) tradeMap.set(key, t);
+                        });
+                    }
+                    if (Array.isArray(incomingTrades)) {
+                        incomingTrades.forEach(t => {
+                            const key = t.trade_id || (t.closed_at + (t.symbol || ''));
+                            if (key) tradeMap.set(key, t);
+                        });
+                    }
+                    const mergedTrades = Array.from(tradeMap.values());
+
+                    // Sort descending: newest closed trade first (Sep 16 → Sep 14 → Sep 11 → ...)
+                    mergedTrades.sort((a, b) => {
+                        const dateA = new Date(a.closed_at).getTime() || 0;
+                        const dateB = new Date(b.closed_at).getTime() || 0;
+                        return dateB - dateA || (b.trade_id || '').localeCompare(a.trade_id || '');
                     });
-                    const newClosedHash = JSON.stringify(sortedTrades);
+
+                    try {
+                        localStorage.setItem('blockstone_closed_trades', JSON.stringify(mergedTrades));
+                    } catch (e) {}
+
+                    const newClosedHash = JSON.stringify(mergedTrades);
                     if (newClosedHash !== lastClosedHash) {
                         lastClosedHash = newClosedHash;
                         const closedBody = document.getElementById('closedTradesBody');
-                        if (sortedTrades && sortedTrades.length > 0) {
-                            closedBody.innerHTML = sortedTrades.map(c => `
+                        if (mergedTrades && mergedTrades.length > 0) {
+                            closedBody.innerHTML = mergedTrades.map(c => `
                                 <tr>
                                     <td style="color: var(--text-white); font-weight: 700;">${c.closed_at}</td>
                                     <td><b style="font-size: 1.05rem;">${c.symbol}</b></td>
                                     <td><span class="${c.side === 'LONG' ? 'tag-long' : 'tag-short'}">${c.side}</span></td>
-                                    <td>$${c.entry_price.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                    <td>$${c.exit_price.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                                    <td>$${(Number(c.entry_price) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                    <td>$${(Number(c.exit_price) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
                                     <td style="color: var(--text-sub); font-size: 0.85rem;">${c.sl_tp}</td>
-                                    <td class="${c.realized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">
-                                        ${c.realized_pnl >= 0 ? '+' : ''}$${c.realized_pnl.toFixed(2)} (${c.pnl_pct >= 0 ? '+' : ''}${c.pnl_pct.toFixed(1)}%)
+                                    <td class="${(Number(c.realized_pnl) || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}">
+                                        ${(Number(c.realized_pnl) || 0) >= 0 ? '+' : ''}$${(Number(c.realized_pnl) || 0).toFixed(2)} (${(Number(c.pnl_pct) || 0) >= 0 ? '+' : ''}${(Number(c.pnl_pct) || 0).toFixed(1)}%)
                                     </td>
                                     <td><span style="color: var(--neon-cyan); font-weight: 800;">${c.closed_by}</span></td>
                                 </tr>
@@ -723,6 +751,7 @@
                         }
                     }
                 }
+
 
 
                 // 3. Fetch OMS Orders History
@@ -825,13 +854,17 @@
 
         async function resetAllHistory() {
             if (confirm("Are you sure you want to clear all previous trades & history and reset balance to $1,000.00 USDT?")) {
+                try { localStorage.removeItem('blockstone_closed_trades'); } catch (e) {}
                 await fetch('/api/trades/reset-all', { method: 'POST' });
                 lastPositionsHash = "";
                 lastOrdersHash = "";
                 lastClosedHash = "";
+                const closedBody = document.getElementById('closedTradesBody');
+                if (closedBody) closedBody.innerHTML = `<tr><td colspan="8" class="empty-state">No closed trades recorded yet.</td></tr>`;
                 fetchDashboard();
             }
         }
+
 
         async function toggleKillSwitch() {
             const btn = document.getElementById('killBtn');

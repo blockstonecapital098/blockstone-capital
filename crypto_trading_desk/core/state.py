@@ -1,12 +1,10 @@
 """
 State persistence module — saves and loads portfolio state across server restarts.
 
-On Vercel (serverless), /tmp is wiped on cold starts. This module persists
-state to the GitHub repo (api/state_data.json) via the GitHub Contents API,
-which survives all cold starts permanently.
-
-Requires env var GITHUB_TOKEN set in Vercel project settings.
-Falls back gracefully to /tmp-only if not configured.
+On Vercel (serverless), instances are ephemeral and /tmp is wiped on cold starts.
+This module persists state with a built-in master ledger (master_trades.json)
+so that historical trades across all dates (Sep 02, 09, 11, 14, 16) are permanently
+preserved, merged with any newly closed live trades, and never wiped on cold starts.
 """
 from __future__ import annotations
 import json
@@ -25,11 +23,23 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
 else:
     STATE_FILE = os.path.join(os.getcwd(), "portfolio_state.json")
 
-# ── GitHub repo persistence ───────────────────────────────────────────────────
+# ── GitHub repo persistence (if GITHUB_TOKEN configured) ──────────────────────
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "blockstonecapital098/blockstone-capital"
 STATE_PATH = "api/state_data.json"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{STATE_PATH}"
+
+
+def _get_master_trades() -> list:
+    """Load permanent baseline historical trades."""
+    try:
+        master_path = os.path.join(os.path.dirname(__file__), "master_trades.json")
+        if os.path.exists(master_path):
+            with open(master_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as exc:
+        logger.warning("Could not load master_trades.json: %s", exc)
+    return []
 
 
 def _gh_headers():
@@ -72,7 +82,6 @@ def _github_save(data: dict) -> bool:
             json.dumps(data, indent=2).encode("utf-8")
         ).decode("utf-8")
 
-        # Get current SHA (needed for update)
         sha = None
         try:
             req = urllib.request.Request(GITHUB_API, headers=_gh_headers())
@@ -105,20 +114,38 @@ def _github_save(data: dict) -> bool:
         return False
 
 
+def _merge_trades(base_trades: list, new_trades: list) -> list:
+    """Merge two trade lists by trade_id, preserving all history."""
+    trade_map = {}
+    for t in base_trades:
+        key = t.get("trade_id") or (t.get("closed_at", "") + t.get("symbol", ""))
+        if key:
+            trade_map[key] = t
+    for t in new_trades:
+        key = t.get("trade_id") or (t.get("closed_at", "") + t.get("symbol", ""))
+        if key:
+            trade_map[key] = t
+    return list(trade_map.values())
+
+
 def save_state(portfolio: Any) -> None:
-    """Serializes portfolio state — GitHub repo (persistent) + /tmp (fast cache)."""
+    """Serializes portfolio state — preserves all master trades + live trades."""
     try:
+        master_trades = _get_master_trades()
+        current_closed = getattr(portfolio, "closed_trades", [])
+        all_closed = _merge_trades(master_trades, current_closed)
+
         data = {
             "realized_pnl": getattr(portfolio, "realized_pnl", 0.0),
             "positions": getattr(portfolio, "positions", {}),
             "total_exposure": getattr(portfolio, "total_exposure", 0.0),
             "entry_prices": getattr(portfolio, "_entry_prices", {}),
-            "closed_trades": getattr(portfolio, "closed_trades", []),
+            "closed_trades": all_closed,
         }
-        # Write /tmp cache first (fast, same-instance reuse)
+        # Write /tmp cache
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        # Push to GitHub (survives cold starts forever)
+        # Push to GitHub if token available
         _github_save(data)
         logger.debug("Portfolio state saved.")
     except Exception as exc:
@@ -126,13 +153,10 @@ def save_state(portfolio: Any) -> None:
 
 
 def load_state(portfolio: Any) -> None:
-    """Restores portfolio state — GitHub first (cold start safe), then /tmp fallback."""
-    data = None
-
-    # 1. Try GitHub — survives cold starts
+    """Restores portfolio state — always initializes with permanent master history."""
+    master_trades = _get_master_trades()
     data = _github_load()
 
-    # 2. Fall back to /tmp if GitHub unavailable
     if data is None and os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -141,13 +165,27 @@ def load_state(portfolio: Any) -> None:
         except Exception as exc:
             logger.error("Failed to load /tmp state: %s", exc)
 
-    if data is None:
-        logger.info("No prior portfolio state found. Starting fresh.")
-        return
+    # Initialize attributes if missing
+    if not hasattr(portfolio, "realized_pnl"):
+        portfolio.realized_pnl = 0.0
+    if not hasattr(portfolio, "positions"):
+        portfolio.positions = {}
+    if not hasattr(portfolio, "total_exposure"):
+        portfolio.total_exposure = 0.0
+    if not hasattr(portfolio, "_entry_prices"):
+        portfolio._entry_prices = {}
+    if not hasattr(portfolio, "closed_trades"):
+        portfolio.closed_trades = []
 
-    portfolio.realized_pnl = data.get("realized_pnl", 0.0)
-    portfolio.positions = data.get("positions", {})
-    portfolio.total_exposure = data.get("total_exposure", 0.0)
-    portfolio._entry_prices = data.get("entry_prices", {})
-    portfolio.closed_trades = data.get("closed_trades", [])
-    logger.info("Successfully restored portfolio state.")
+    if data:
+        portfolio.realized_pnl = data.get("realized_pnl", portfolio.realized_pnl)
+        portfolio.positions = data.get("positions", portfolio.positions)
+        portfolio.total_exposure = data.get("total_exposure", portfolio.total_exposure)
+        portfolio._entry_prices = data.get("entry_prices", portfolio._entry_prices)
+        loaded_closed = data.get("closed_trades", [])
+        portfolio.closed_trades = _merge_trades(master_trades, loaded_closed)
+    else:
+        # First cold start: seed with complete master history
+        portfolio.closed_trades = list(master_trades)
+
+    logger.info("Portfolio restored with %d closed trades.", len(portfolio.closed_trades))

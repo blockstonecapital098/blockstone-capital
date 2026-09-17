@@ -56,7 +56,15 @@ async def get_closed_trades(request: Request):
     except Exception:
         pass
     closed_trades = getattr(portfolio, "closed_trades", [])
-    return list(reversed(closed_trades))
+
+    def _parse_date(t):
+        try:
+            return datetime.strptime(t.get("closed_at", ""), "%b %d, %Y %I:%M:%S %p")
+        except Exception:
+            return datetime.min
+
+    return sorted(closed_trades, key=_parse_date, reverse=True)
+
 
 
 @router.post("/simulate")
