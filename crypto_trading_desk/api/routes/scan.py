@@ -58,7 +58,12 @@ def _get_http_client() -> httpx.AsyncClient:
 
 
 async def _get_klines(symbol: str, interval: str = "1h", limit: int = 60) -> list:
-    """Fetch OHLCV klines with module-level cache (solves Vercel cold-start issue)."""
+    """
+    Fetch OHLCV klines with robust multi-exchange fallback:
+    1. MEXC Spot (open access, standard Binance schema, works reliably on Vercel/AWS)
+    2. Bybit Linear (robust fallback, converted to standard schema)
+    3. Binance Spot (fallback for non-blocked environments)
+    """
     global _kline_cache
     cache_key = f"{symbol}_{interval}_{limit}"
     now = time.time()
@@ -68,16 +73,66 @@ async def _get_klines(symbol: str, interval: str = "1h", limit: int = 60) -> lis
 
     clean = symbol.replace("/", "").upper()
     client = _get_http_client()
+
+    # Source 1: MEXC Spot (Standard schema: [time, open, high, low, close, volume, ...])
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={clean}&interval={interval}&limit={limit}"
-        res = await client.get(url, timeout=7.0)
+        mexc_interval = "60m" if interval in ("1h", "60m") else "4h" if interval == "4h" else "1d"
+        url = f"https://api.mexc.com/api/v3/klines?symbol={clean}&interval={mexc_interval}&limit={limit}"
+        res = await client.get(url, timeout=5.0)
         if res.status_code == 200:
             data = res.json()
-            _kline_cache[cache_key] = {"data": data, "ts": now}
-            return data
+            if isinstance(data, list) and len(data) >= 10:
+                _kline_cache[cache_key] = {"data": data, "ts": now}
+                logger.debug("Klines OK from MEXC for %s (%d candles)", symbol, len(data))
+                return data
     except Exception as e:
-        logger.debug("Klines fetch error %s %s: %s", symbol, interval, e)
+        logger.debug("MEXC klines failed for %s: %s", symbol, e)
+
+    # Source 2: Bybit Linear (Robust cloud-friendly fallback)
+    try:
+        bybit_interval = "60" if interval in ("1h", "60m") else "240" if interval == "4h" else "D"
+        url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={clean}&interval={bybit_interval}&limit={limit}"
+        res = await client.get(url, timeout=5.0)
+        if res.status_code == 200:
+            raw_list = res.json().get("result", {}).get("list", [])
+            if raw_list and len(raw_list) >= 10:
+                # Bybit returns newest first, so reverse to chronological order
+                # format: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
+                converted = []
+                for row in reversed(raw_list):
+                    converted.append([
+                        int(row[0]),
+                        str(row[1]),
+                        str(row[2]),
+                        str(row[3]),
+                        str(row[4]),
+                        str(row[5]),
+                        int(row[0]) + 3599999,
+                        "0", "0", "0", "0", "0"
+                    ])
+                _kline_cache[cache_key] = {"data": converted, "ts": now}
+                logger.info("Klines OK from Bybit fallback for %s (%d candles)", symbol, len(converted))
+                return converted
+    except Exception as e:
+        logger.debug("Bybit klines failed for %s: %s", symbol, e)
+
+    # Source 3: Binance Spot
+    for binance_host in ["api.binance.com", "api1.binance.com", "api2.binance.com"]:
+        try:
+            url = f"https://{binance_host}/api/v3/klines?symbol={clean}&interval={interval}&limit={limit}"
+            res = await client.get(url, timeout=5.0)
+            if res.status_code == 200:
+                data = res.json()
+                if isinstance(data, list) and len(data) >= 10:
+                    _kline_cache[cache_key] = {"data": data, "ts": now}
+                    logger.debug("Klines OK from %s for %s", binance_host, symbol)
+                    return data
+        except Exception as e:
+            logger.debug("Binance %s failed for %s: %s", binance_host, symbol, e)
+
+    logger.warning("ALL klines sources failed for %s", symbol)
     return []
+
 
 
 async def _get_fear_greed() -> dict:
@@ -549,9 +604,14 @@ async def run_scan_tick(request: Request):
     _scan_state["last_scan"] = now
 
     # ── Pre-warm ALL klines in parallel (fixes Vercel 10s timeout) ───────────
-    # Sequential: 6 × 2s = 12s → exceeds Vercel limit
-    # Parallel:  all at once = ~2s → well within limit
+    # All 6 fetches run concurrently: ~1-2s total vs 12s sequential
     await asyncio.gather(*[_get_klines(s, "1h", 60) for s in SYMBOLS], return_exceptions=True)
+
+    # Diagnostics: how many symbols got kline data?
+    klines_ok = [s for s in SYMBOLS if len(_kline_cache.get(f"{s}_1h_60", {}).get("data", [])) >= 10]
+    klines_failed = [s for s in SYMBOLS if s not in klines_ok]
+    if klines_failed:
+        logger.warning("Klines FAILED for: %s", klines_failed)
 
     settings = request.app.state.settings
 
@@ -753,4 +813,6 @@ async def run_scan_tick(request: Request):
         "engine": "Aladdin_v5_Expert",
         "fear_greed": {"value": fg_value, "label": fg_label},
         "min_score_bar": _get_min_score(fg_value),
+        "klines_ok": len(klines_ok),
+        "klines_failed": klines_failed,
     }
