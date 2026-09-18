@@ -137,13 +137,17 @@ def _calc_rsi(closes: list[float], period: int = 14) -> float:
 
 
 def _calc_macd(closes: list[float]) -> tuple[float, float, float]:
-    """Fast MACD using pre-built EMA series — cache-friendly."""
+    """Accurate MACD: EMA12 and EMA26 built incrementally from start."""
     if len(closes) < 26:
         return 0.0, 0.0, 0.0
-    # Build EMA12 and EMA26 series from full closes
     k12, k26 = 2.0 / 13, 2.0 / 27
+    # Seed EMAs from first 12/26 bars
     e12 = sum(closes[:12]) / 12
     e26 = sum(closes[:26]) / 26
+    # Update e12 for indices 12-25 (before e26 is ready)
+    for i in range(12, 26):
+        e12 = closes[i] * k12 + e12 * (1 - k12)
+    # Build MACD series from index 26 onwards
     macd_series = []
     for i in range(26, len(closes)):
         e12 = closes[i] * k12 + e12 * (1 - k12)
@@ -199,19 +203,30 @@ def _check_higher_highs(closes: list[float], side: str, lookback: int = 6) -> bo
         return len(troughs) >= 2 and troughs[-1] < troughs[-2] if len(troughs) >= 2 else False
 
 
-def _candle_confirmation(closes: list[float], opens: list[float], side: str) -> bool:
+def _candle_bonus(closes: list[float], opens: list[float], side: str) -> int:
     """
-    Mandatory gate: last 2 candles must close in trade direction.
-    Prevents entering at the very top/bottom of a move.
+    Candle direction bonus (+8 pts) — not a mandatory gate.
+    Rewards entries where recent candles confirm direction,
+    but does NOT block signals — just reduces the score if candles contradict.
     """
     if len(closes) < 3 or len(opens) < 3:
-        return True  # Insufficient data — don't block
+        return 4  # Neutral — no data to judge
     c1 = closes[-1] > opens[-1]   # Last candle bullish?
-    c2 = closes[-2] > opens[-2]   # Candle before bullish?
+    c2 = closes[-2] > opens[-2]   # Prior candle bullish?
     if side == "buy":
-        return c1 or c2  # At least 1 of last 2 candles green (not too strict)
+        if c1 and c2:
+            return 8   # Both green — strong confirmation
+        elif c1 or c2:
+            return 4   # One green — mild confirmation
+        else:
+            return 0   # Both red — no confirmation (reduces score but doesn't block)
     else:
-        return (not c1) or (not c2)  # At least 1 of last 2 candles red
+        if not c1 and not c2:
+            return 8   # Both red — short confirmation
+        elif not c1 or not c2:
+            return 4   # One red — mild
+        else:
+            return 0   # Both green — no short confirmation
 
 
 # ── Aladdin v5 Multi-Factor Scoring Engine ────────────────────────────────────
@@ -407,6 +422,12 @@ def _score_symbol_v5(
     f9 = 10 if hh_ll else 0
     factors["HH_LL_Structure"] = f9
 
+    # ── Factor 10: Candle Confirmation Bonus (max 8 pts) ──────────────────────
+    # Rewards entries with confirming candles, penalizes contradicting ones
+    # Does NOT block — just adjusts the score
+    f10 = _candle_bonus(closes, opens, side)
+    factors["Candle_Confirmation"] = f10
+
     total = sum(factors.values())
     return {
         "score": total,
@@ -454,62 +475,62 @@ def _get_min_score(fg_value: int) -> int:
 
 async def _analyze_symbol_v5(symbol: str, fg_value: int) -> dict | None:
     """
-    Full Aladdin v5 analysis: gradient scoring + candle gate + HH/LL detection.
-    Returns best-side signal or None if no edge.
+    Full Aladdin v5 analysis: 10-factor gradient scoring.
+    Returns best-side signal dict or None if below minimum score.
     """
-    klines = await _get_klines(symbol, "1h", 60)
-    if len(klines) < 30:
+    try:
+        klines = await _get_klines(symbol, "1h", 60)
+        if len(klines) < 30:
+            return None
+
+        closes = [float(k[4]) for k in klines]
+        opens = [float(k[1]) for k in klines]
+        live_price = closes[-1]
+
+        min_score = _get_min_score(fg_value)
+
+        # Score both sides (candle bonus included in scoring, not a gate)
+        bull = _score_symbol_v5(closes, opens, klines, "buy", fg_value)
+        bear = _score_symbol_v5(closes, opens, klines, "sell", fg_value)
+
+        # Pick strongest side above dynamic minimum threshold
+        if bull["score"] >= bear["score"] and bull["score"] >= min_score:
+            chosen = bull
+            side = "buy"
+            regime_label = "BULL_ALADDIN_V5"
+        elif bear["score"] > bull["score"] and bear["score"] >= min_score:
+            chosen = bear
+            side = "sell"
+            regime_label = "BEAR_ALADDIN_V5"
+        else:
+            return None
+
+        score = chosen["score"]
+        atr_pct = chosen["atr_pct"]
+        vol_regime = chosen["volatility_regime"]
+        tp_pct, sl_pct = _get_adaptive_tp_sl(atr_pct, vol_regime, score)
+        rr = round(tp_pct / sl_pct, 2)
+        confidence = round(min(0.96, 0.60 + score / 230), 2)
+
+        evidence = [
+            f"{symbol}: Aladdin v5 Score {score}/113 ({side.upper()}) | Min={min_score} | Vol={vol_regime}",
+            f"{symbol}: EMA {round(chosen['ema9'],2)}/{round(chosen['ema21'],2)}/{round(chosen['ema50'],2)} | RSI {round(chosen['rsi'],1)}",
+            f"{symbol}: MACD {round(chosen['macd_line'],4)} / Sig {round(chosen['signal_line'],4)} | Hist {round(chosen['histogram'],4)}",
+            f"{symbol}: BB {round(chosen['bb_pos']*100,1)}% (width {round(chosen['bb_width_pct'],2)}%) | 4h{chosen['chg_4h']:+.2f}% 24h{chosen['chg_24h']:+.2f}%",
+            f"{symbol}: F&G={fg_value} | TP+{tp_pct:.2f}% SL-{sl_pct:.2f}% RR={rr}x | Conf={confidence}",
+        ]
+
+        return {
+            "symbol": symbol, "side": side, "live_price": live_price,
+            "regime": regime_label, "confidence": confidence, "evidence": evidence,
+            "tp_pct": tp_pct, "sl_pct": sl_pct, "rr_ratio": rr,
+            "score": score, "min_score": min_score,
+            "bull_score": bull["score"], "bear_score": bear["score"],
+            "factors": chosen["factors"], "vol_regime": vol_regime, "atr_pct": atr_pct,
+        }
+    except Exception as e:
+        logger.debug("Aladdin v5 analysis error for %s: %s", symbol, e)
         return None
-
-    closes = [float(k[4]) for k in klines]
-    opens = [float(k[1]) for k in klines]
-    live_price = closes[-1]
-
-    min_score = _get_min_score(fg_value)
-
-    # Score both sides
-    bull = _score_symbol_v5(closes, opens, klines, "buy", fg_value)
-    bear = _score_symbol_v5(closes, opens, klines, "sell", fg_value)
-
-    # Pick strongest side, must exceed dynamic minimum
-    if bull["score"] >= bear["score"] and bull["score"] >= min_score:
-        chosen = bull
-        side = "buy"
-        regime_label = "BULL_ALADDIN_V5"
-    elif bear["score"] > bull["score"] and bear["score"] >= min_score:
-        chosen = bear
-        side = "sell"
-        regime_label = "BEAR_ALADDIN_V5"
-    else:
-        return None
-
-    # ── Mandatory Candle Confirmation Gate ────────────────────────────────────
-    if not _candle_confirmation(closes, opens, side):
-        return None  # Last 2 candles contradict direction — skip
-
-    score = chosen["score"]
-    atr_pct = chosen["atr_pct"]
-    vol_regime = chosen["volatility_regime"]
-    tp_pct, sl_pct = _get_adaptive_tp_sl(atr_pct, vol_regime, score)
-    rr = round(tp_pct / sl_pct, 2)
-    confidence = round(min(0.96, 0.60 + score / 220), 2)
-
-    evidence = [
-        f"{symbol}: Aladdin v5 Score {score}/105 ({side.upper()}) | Min bar={min_score} | Vol={vol_regime}",
-        f"{symbol}: EMA {round(chosen['ema9'],2)}/{round(chosen['ema21'],2)}/{round(chosen['ema50'],2)} | RSI {round(chosen['rsi'],1)}",
-        f"{symbol}: MACD {round(chosen['macd_line'],4)} / Signal {round(chosen['signal_line'],4)} | Hist {round(chosen['histogram'],4)}",
-        f"{symbol}: BB {round(chosen['bb_pos']*100,1)}% in band (width {round(chosen['bb_width_pct'],2)}%) | 4h{chosen['chg_4h']:+.2f}% 24h{chosen['chg_24h']:+.2f}%",
-        f"{symbol}: F&G={fg_value} | TP+{tp_pct:.2f}% SL-{sl_pct:.2f}% RR={rr}x | Conf={confidence} | HH/LL={chosen['factors']['HH_LL_Structure']>0}",
-    ]
-
-    return {
-        "symbol": symbol, "side": side, "live_price": live_price,
-        "regime": regime_label, "confidence": confidence, "evidence": evidence,
-        "tp_pct": tp_pct, "sl_pct": sl_pct, "rr_ratio": rr,
-        "score": score, "min_score": min_score,
-        "bull_score": bull["score"], "bear_score": bear["score"],
-        "factors": chosen["factors"], "vol_regime": vol_regime, "atr_pct": atr_pct,
-    }
 
 
 @router.post("/tick")
@@ -655,18 +676,19 @@ async def run_scan_tick(request: Request):
 
             signal = await _analyze_symbol_v5(symbol, fg_value)
             if signal is None:
+                # Quick score debug using cached klines (no extra API call)
                 score_info = ""
                 try:
-                    k = await _get_klines(symbol, "1h", 60)
+                    k = _kline_cache.get(f"{symbol}_1h_60", {}).get("data", [])
                     if k:
                         cl = [float(x[4]) for x in k]
                         op = [float(x[1]) for x in k]
-                        bull = _score_symbol_v5(cl, op, k, "buy", fg_value)
-                        bear = _score_symbol_v5(cl, op, k, "sell", fg_value)
-                        score_info = f" (Bull={bull['score']} Bear={bear['score']} Min={_get_min_score(fg_value)})"
+                        b = _score_symbol_v5(cl, op, k, "buy", fg_value)
+                        br = _score_symbol_v5(cl, op, k, "sell", fg_value)
+                        score_info = f" [Bull={b['score']} Bear={br['score']} Min={_get_min_score(fg_value)}]"
                 except Exception:
                     pass
-                actions_taken.append(f"SKIPPED {symbol}: no Aladdin v5 edge{score_info}")
+                actions_taken.append(f"SKIPPED {symbol}: score below bar{score_info}")
                 continue
 
             side = signal["side"]
