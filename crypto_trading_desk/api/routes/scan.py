@@ -542,12 +542,18 @@ async def run_scan_tick(request: Request):
     portfolio = request.app.state.portfolio
     emergency = request.app.state.emergency
     event_bus = request.app.state.event_bus
-    settings = request.app.state.settings
 
     now = _time.time()
     if now - _scan_state["last_scan"] < 10:
         return {"status": "throttled", "message": "Scan runs every 10s"}
     _scan_state["last_scan"] = now
+
+    # ── Pre-warm ALL klines in parallel (fixes Vercel 10s timeout) ───────────
+    # Sequential: 6 × 2s = 12s → exceeds Vercel limit
+    # Parallel:  all at once = ~2s → well within limit
+    await asyncio.gather(*[_get_klines(s, "1h", 60) for s in SYMBOLS], return_exceptions=True)
+
+    settings = request.app.state.settings
 
     try:
         from crypto_trading_desk.core.state import load_state
