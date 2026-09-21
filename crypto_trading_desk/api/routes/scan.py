@@ -1,17 +1,16 @@
 """
-Blockstone Capital — Aladdin-Class AI Trading Engine v5.0 (Expert Edition)
+Blockstone Capital — Aladdin-Class AI Swing Trading Engine v6.0
 
-Improvements over v4:
-  - Gradient factor scoring (no hard 0-cliff zones — smooth curves)
-  - Trend-continuation RSI logic (RSI 65-80 in uptrend = healthy, not penalized)
-  - MACD dual-weight: direction (8pt) + histogram strength (7pt) separately
-  - Kline module-level cache (60s TTL) — solves Vercel cold-start MACD issue
-  - Candle confirmation gate: last 2 candles must align with trade direction
-  - Higher-High / Lower-Low momentum detector (+10pt bonus factor)
-  - Smarter BB scoring: trend-follow mode (wide bands, trade with trend)
-  - Portfolio Heat Guard: skip new trades if open loss > $15
-  - Granular trailing stop: every 25% of TP gain, tightens SL by 0.3x
-  - Dynamic minimum score: adjusts with Fear & Greed (greedy market = higher bar)
+Transformed from Scalping to Institutional Swing Trading:
+  - Multi-Timeframe Architecture: 4-Hour (4H) primary execution + 1-Day (1D) macro trend filter
+  - Swing Targets: Realistic 3.5% to 8.5% Take-Profit, 1.8% to 3.5% Stop-Loss (R:R 2.0x - 3.0x)
+  - Wide stops survive normal intra-day noise, wicks, and volatility
+  - Swing Pullback Detection: Enters on pullbacks to 4H EMA21/50, never chasing tops/bottoms
+  - 1D Macro Confluence: Never swing trade against the Daily institutional tide
+  - 3-Stage Swing Trailing Ratchet: Moves to Breakeven at +2.0% profit, trails to lock 50-75% at higher tiers
+  - Aladdin Portfolio Correlation Guard: Max 1 position per correlated bucket
+  - Dynamic Conviction Sizing: $400 / $500 / $650 notional based on multi-factor swing score
+  - Cloud-Grade Multi-Exchange Pipeline: MEXC + Bybit + Binance fallback with in-memory caching
 """
 from __future__ import annotations
 import asyncio
@@ -38,8 +37,8 @@ CORRELATION_BUCKETS = {
 }
 MAX_PER_BUCKET = {"A": 1, "B": 1}
 
-# Base minimum Aladdin score to enter a trade
-BASE_MIN_SCORE = 58
+# Minimum Aladdin Swing Score to enter a position (out of 107 max points)
+BASE_MIN_SWING_SCORE = 60
 
 _scan_state = {"index": 0, "last_scan": 0}
 _http_client: httpx.AsyncClient | None = None
@@ -47,7 +46,7 @@ _fear_greed_cache: dict = {"value": 50, "label": "Neutral", "ts": 0}
 
 # Kline cache: {symbol+interval -> {"data": [...], "ts": float}}
 _kline_cache: dict = {}
-KLINE_CACHE_TTL = 60  # seconds
+KLINE_CACHE_TTL = 90  # 90 seconds TTL for 4h/1d candles
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -57,7 +56,7 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
-async def _get_klines(symbol: str, interval: str = "1h", limit: int = 60) -> list:
+async def _get_klines(symbol: str, interval: str = "4h", limit: int = 60) -> list:
     """
     Fetch OHLCV klines with robust multi-exchange fallback:
     1. MEXC Spot (open access, standard Binance schema, works reliably on Vercel/AWS)
@@ -74,7 +73,7 @@ async def _get_klines(symbol: str, interval: str = "1h", limit: int = 60) -> lis
     clean = symbol.replace("/", "").upper()
     client = _get_http_client()
 
-    # Source 1: MEXC Spot (Standard schema: [time, open, high, low, close, volume, ...])
+    # Source 1: MEXC Spot
     try:
         mexc_interval = "60m" if interval in ("1h", "60m") else "4h" if interval == "4h" else "1d"
         url = f"https://api.mexc.com/api/v3/klines?symbol={clean}&interval={mexc_interval}&limit={limit}"
@@ -83,12 +82,11 @@ async def _get_klines(symbol: str, interval: str = "1h", limit: int = 60) -> lis
             data = res.json()
             if isinstance(data, list) and len(data) >= 10:
                 _kline_cache[cache_key] = {"data": data, "ts": now}
-                logger.debug("Klines OK from MEXC for %s (%d candles)", symbol, len(data))
                 return data
     except Exception as e:
-        logger.debug("MEXC klines failed for %s: %s", symbol, e)
+        logger.debug("MEXC %s %s failed: %s", symbol, interval, e)
 
-    # Source 2: Bybit Linear (Robust cloud-friendly fallback)
+    # Source 2: Bybit Linear
     try:
         bybit_interval = "60" if interval in ("1h", "60m") else "240" if interval == "4h" else "D"
         url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={clean}&interval={bybit_interval}&limit={limit}"
@@ -96,8 +94,6 @@ async def _get_klines(symbol: str, interval: str = "1h", limit: int = 60) -> lis
         if res.status_code == 200:
             raw_list = res.json().get("result", {}).get("list", [])
             if raw_list and len(raw_list) >= 10:
-                # Bybit returns newest first, so reverse to chronological order
-                # format: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
                 converted = []
                 for row in reversed(raw_list):
                     converted.append([
@@ -107,14 +103,13 @@ async def _get_klines(symbol: str, interval: str = "1h", limit: int = 60) -> lis
                         str(row[3]),
                         str(row[4]),
                         str(row[5]),
-                        int(row[0]) + 3599999,
+                        int(row[0]) + 14399999,
                         "0", "0", "0", "0", "0"
                     ])
                 _kline_cache[cache_key] = {"data": converted, "ts": now}
-                logger.info("Klines OK from Bybit fallback for %s (%d candles)", symbol, len(converted))
                 return converted
     except Exception as e:
-        logger.debug("Bybit klines failed for %s: %s", symbol, e)
+        logger.debug("Bybit %s %s failed: %s", symbol, interval, e)
 
     # Source 3: Binance Spot
     for binance_host in ["api.binance.com", "api1.binance.com", "api2.binance.com"]:
@@ -125,14 +120,11 @@ async def _get_klines(symbol: str, interval: str = "1h", limit: int = 60) -> lis
                 data = res.json()
                 if isinstance(data, list) and len(data) >= 10:
                     _kline_cache[cache_key] = {"data": data, "ts": now}
-                    logger.debug("Klines OK from %s for %s", binance_host, symbol)
                     return data
         except Exception as e:
-            logger.debug("Binance %s failed for %s: %s", binance_host, symbol, e)
+            logger.debug("Binance %s %s failed: %s", symbol, interval, e)
 
-    logger.warning("ALL klines sources failed for %s", symbol)
     return []
-
 
 
 async def _get_fear_greed() -> dict:
@@ -143,7 +135,7 @@ async def _get_fear_greed() -> dict:
         return _fear_greed_cache
     client = _get_http_client()
     try:
-        res = await client.get("https://api.alternative.me/fng/?limit=1", timeout=5.0)
+        res = await client.get("https://api.alternative.me/fng/?limit=1", timeout=4.0)
         if res.status_code == 200:
             d = res.json()["data"][0]
             _fear_greed_cache = {
@@ -192,17 +184,14 @@ def _calc_rsi(closes: list[float], period: int = 14) -> float:
 
 
 def _calc_macd(closes: list[float]) -> tuple[float, float, float]:
-    """Accurate MACD: EMA12 and EMA26 built incrementally from start."""
+    """Accurate MACD: EMA12 and EMA26 built incrementally."""
     if len(closes) < 26:
         return 0.0, 0.0, 0.0
     k12, k26 = 2.0 / 13, 2.0 / 27
-    # Seed EMAs from first 12/26 bars
     e12 = sum(closes[:12]) / 12
     e26 = sum(closes[:26]) / 26
-    # Update e12 for indices 12-25 (before e26 is ready)
     for i in range(12, 26):
         e12 = closes[i] * k12 + e12 * (1 - k12)
-    # Build MACD series from index 26 onwards
     macd_series = []
     for i in range(26, len(closes)):
         e12 = closes[i] * k12 + e12 * (1 - k12)
@@ -211,7 +200,6 @@ def _calc_macd(closes: list[float]) -> tuple[float, float, float]:
     if not macd_series:
         return 0.0, 0.0, 0.0
     macd_line = macd_series[-1]
-    # Signal = 9-period EMA of MACD series
     k9 = 2.0 / 10
     signal = sum(macd_series[:9]) / min(9, len(macd_series))
     for v in macd_series[9:]:
@@ -224,7 +212,7 @@ def _calc_bollinger(closes: list[float], period: int = 20) -> tuple[float, float
     """Returns (upper, mid, lower, bb_pos 0-1)."""
     if len(closes) < period:
         m = closes[-1]
-        return m * 1.02, m, m * 0.98, 0.5
+        return m * 1.05, m, m * 0.95, 0.5
     window = closes[-period:]
     mid = sum(window) / period
     std = (sum((x - mid) ** 2 for x in window) / period) ** 0.5
@@ -235,278 +223,253 @@ def _calc_bollinger(closes: list[float], period: int = 20) -> tuple[float, float
     return upper, mid, lower, bb_pos
 
 
-def _volatility_regime(atr_pct: float) -> str:
-    if atr_pct < 0.7:
-        return "LOW"
-    elif atr_pct < 2.0:
-        return "MED"
-    else:
-        return "HIGH"
-
-
-def _check_higher_highs(closes: list[float], side: str, lookback: int = 6) -> bool:
-    """Detect higher-highs (bull) or lower-lows (bear) in recent candles."""
+def _check_higher_highs(closes: list[float], side: str, lookback: int = 8) -> bool:
+    """Detect higher-lows (bull swing structure) or lower-highs (bear swing structure)."""
     if len(closes) < lookback + 1:
         return False
     recent = closes[-lookback:]
     if side == "buy":
-        # Check if last 3 peaks are rising
-        peaks = [recent[i] for i in range(1, len(recent) - 1) if recent[i] > recent[i-1] and recent[i] > recent[i+1]]
-        return len(peaks) >= 2 and peaks[-1] > peaks[-2] if len(peaks) >= 2 else False
-    else:
+        # Check rising troughs (higher lows = bull accumulation)
         troughs = [recent[i] for i in range(1, len(recent) - 1) if recent[i] < recent[i-1] and recent[i] < recent[i+1]]
-        return len(troughs) >= 2 and troughs[-1] < troughs[-2] if len(troughs) >= 2 else False
-
-
-def _candle_bonus(closes: list[float], opens: list[float], side: str) -> int:
-    """
-    Candle direction bonus (+8 pts) — not a mandatory gate.
-    Rewards entries where recent candles confirm direction,
-    but does NOT block signals — just reduces the score if candles contradict.
-    """
-    if len(closes) < 3 or len(opens) < 3:
-        return 4  # Neutral — no data to judge
-    c1 = closes[-1] > opens[-1]   # Last candle bullish?
-    c2 = closes[-2] > opens[-2]   # Prior candle bullish?
-    if side == "buy":
-        if c1 and c2:
-            return 8   # Both green — strong confirmation
-        elif c1 or c2:
-            return 4   # One green — mild confirmation
-        else:
-            return 0   # Both red — no confirmation (reduces score but doesn't block)
+        return len(troughs) >= 2 and troughs[-1] > troughs[-2] if len(troughs) >= 2 else False
     else:
-        if not c1 and not c2:
-            return 8   # Both red — short confirmation
-        elif not c1 or not c2:
-            return 4   # One red — mild
-        else:
-            return 0   # Both green — no short confirmation
+        # Check falling peaks (lower highs = bear distribution)
+        peaks = [recent[i] for i in range(1, len(recent) - 1) if recent[i] > recent[i-1] and recent[i] > recent[i+1]]
+        return len(peaks) >= 2 and peaks[-1] < peaks[-2] if len(peaks) >= 2 else False
 
 
-# ── Aladdin v5 Multi-Factor Scoring Engine ────────────────────────────────────
+# ── Aladdin Swing Trading Multi-Factor Matrix (0–107 pts) ─────────────────────
 
-def _score_symbol_v5(
-    closes: list[float],
-    opens: list[float],
-    klines: list,
+def _score_symbol_swing(
+    c4h: list[float],
+    o4h: list[float],
+    k4h: list,
+    c1d: list[float],
+    k1d: list,
     side: str,
     fg_value: int,
 ) -> dict:
     """
-    9-factor gradient scoring engine. No hard binary cliffs — smooth curves.
-    Returns score (0-105 max with bonus) and full breakdown.
+    Multi-Timeframe Swing Factor Scoring (4H primary execution + 1D macro trend filter).
+    Designed specifically to catch high-probability multi-day swing expansions.
     """
-    live = closes[-1]
-    ema9 = _calc_ema(closes, 9)
-    ema21 = _calc_ema(closes, 21)
-    ema50 = _calc_ema(closes, 50)
-    rsi = _calc_rsi(closes, 14)
-    macd_line, signal_line, histogram = _calc_macd(closes)
-    bb_upper, bb_mid, bb_lower, bb_pos = _calc_bollinger(closes, 20)
-    atr = _calc_atr(klines, 14)
-    atr_pct = (atr / live) * 100 if live > 0 else 0
+    live = c4h[-1]
+    ema9_4h = _calc_ema(c4h, 9)
+    ema21_4h = _calc_ema(c4h, 21)
+    ema50_4h = _calc_ema(c4h, 50)
+    rsi_4h = _calc_rsi(c4h, 14)
+    macd_line, signal_line, histogram = _calc_macd(c4h)
+    bb_upper, bb_mid, bb_lower, bb_pos = _calc_bollinger(c4h, 20)
+    atr_4h = _calc_atr(k4h, 14)
+    atr_pct_4h = (atr_4h / live) * 100 if live > 0 else 0
 
-    chg_4h = (closes[-1] - closes[-5]) / closes[-5] * 100 if len(closes) >= 5 else 0
-    chg_8h = (closes[-1] - closes[-9]) / closes[-9] * 100 if len(closes) >= 9 else 0
-    chg_24h = (closes[-1] - closes[-25]) / closes[-25] * 100 if len(closes) >= 25 else 0
+    # 1D Macro Trend
+    ema20_1d = _calc_ema(c1d, 20) if len(c1d) >= 10 else live
+    ema50_1d = _calc_ema(c1d, 50) if len(c1d) >= 20 else ema20_1d
+
+    # Swing Momentum: 24h (6x 4h bars) and 72h (18x 4h bars)
+    chg_24h = (c4h[-1] - c4h[-7]) / c4h[-7] * 100 if len(c4h) >= 7 else 0.0
+    chg_72h = (c4h[-1] - c4h[-19]) / c4h[-19] * 100 if len(c4h) >= 19 else 0.0
 
     factors = {}
 
-    # ── Factor 1: EMA Stack (max 20 pts) — gradient ───────────────────────────
+    # ── Factor 1: 4H Trend Structure (max 20 pts) ─────────────────────────────
     if side == "buy":
-        if ema9 > ema21 > ema50:
-            ema_gap = (ema9 - ema50) / ema50 * 100
-            f1 = min(20, 15 + ema_gap * 2)   # Bonus for wider separation
-        elif ema9 > ema21:
-            f1 = 10
-        elif ema9 > ema50:
-            f1 = 5
+        if ema9_4h > ema21_4h > ema50_4h:
+            f1 = 20  # Full bull swing stack
+        elif ema9_4h > ema21_4h:
+            f1 = 12  # Bullish cross active
+        elif live > ema50_4h:
+            f1 = 6
         else:
             f1 = 0
     else:
-        if ema9 < ema21 < ema50:
-            ema_gap = (ema50 - ema9) / ema50 * 100
-            f1 = min(20, 15 + ema_gap * 2)
-        elif ema9 < ema21:
-            f1 = 10
-        elif ema9 < ema50:
-            f1 = 5
+        if ema9_4h < ema21_4h < ema50_4h:
+            f1 = 20  # Full bear swing stack
+        elif ema9_4h < ema21_4h:
+            f1 = 12  # Bearish cross active
+        elif live < ema50_4h:
+            f1 = 6
         else:
             f1 = 0
-    factors["EMA_Stack"] = round(f1)
+    factors["Trend_Stack_4H"] = f1
 
-    # ── Factor 2: Multi-Timeframe Momentum (max 18 pts) — gradient ────────────
+    # ── Factor 2: 1D Macro Confluence Filter (max 20 pts) ─────────────────────
+    # Essential for swing trading: never trade against the Daily tide
     if side == "buy":
-        f2_4h = min(10, max(0, chg_4h * 8)) if chg_4h > 0 else max(-5, chg_4h * 3)
-        f2_24h = min(8, max(0, chg_24h * 1.5)) if chg_24h > 0 else max(-4, chg_24h)
-        f2 = max(0, f2_4h + f2_24h)
+        if live > ema20_1d > ema50_1d:
+            f2 = 20  # Full macro daily bull confluence
+        elif live > ema20_1d:
+            f2 = 12  # Above daily 20 EMA
+        elif live > ema50_1d:
+            f2 = 6
+        else:
+            f2 = 0
     else:
-        f2_4h = min(10, max(0, abs(chg_4h) * 8)) if chg_4h < 0 else max(-5, -chg_4h * 3)
-        f2_24h = min(8, max(0, abs(chg_24h) * 1.5)) if chg_24h < 0 else max(-4, -chg_24h)
-        f2 = max(0, f2_4h + f2_24h)
-    factors["Momentum_MTF"] = round(min(18, f2))
-
-    # ── Factor 3: RSI — trend-aware gradient (max 15 pts) ─────────────────────
-    # Key insight: in a strong trend RSI can stay 65-80 for hours — this is HEALTHY
-    # Only penalize EXTREME overbought/oversold (>82 or <18)
-    if side == "buy":
-        if 50 <= rsi <= 68:
-            f3 = 15   # Ideal trend continuation zone
-        elif 68 < rsi <= 78:
-            f3 = 12   # Strong trend — acceptable
-        elif 78 < rsi <= 82:
-            f3 = 6    # Getting hot — reduce score
-        elif rsi > 82:
-            f3 = 0    # Extreme overbought — risk reversal
-        elif 40 <= rsi < 50:
-            f3 = 10   # Building momentum
-        elif 30 <= rsi < 40:
-            f3 = 5    # Weak — countertrend signal
+        if live < ema20_1d < ema50_1d:
+            f2 = 20  # Full macro daily bear confluence
+        elif live < ema20_1d:
+            f2 = 12
+        elif live < ema50_1d:
+            f2 = 6
         else:
-            f3 = 0    # Oversold — no bull momentum
+            f2 = 0
+    factors["Macro_Confluence_1D"] = f2
+
+    # ── Factor 3: Swing Value / Pullback Entry Zone (max 15 pts) ──────────────
+    # Golden rule: Buy value on the dip to EMA21, do NOT chase overextended moves
+    dist_ema21_pct = ((live - ema21_4h) / ema21_4h) * 100
+
+    if side == "buy":
+        if 0.0 <= dist_ema21_pct <= 2.2:
+            f3 = 15  # Prime sweet spot: resting right at EMA21 support
+        elif -2.0 <= dist_ema21_pct < 0.0:
+            f3 = 12  # Dip between EMA21 and EMA50 (discount value)
+        elif 2.2 < dist_ema21_pct <= 4.5:
+            f3 = 8   # Moderate extension
+        elif dist_ema21_pct > 6.0:
+            f3 = 1   # Overextended pump — DO NOT CHASE
+        else:
+            f3 = 4
     else:
-        if 32 <= rsi <= 50:
-            f3 = 15   # Ideal bear zone
-        elif 22 <= rsi < 32:
-            f3 = 12   # Strong downtrend — acceptable
-        elif 18 <= rsi < 22:
-            f3 = 6    # Getting cold — reduce score
-        elif rsi < 18:
-            f3 = 0    # Extreme oversold — bounce risk
-        elif 50 < rsi <= 60:
-            f3 = 10   # Weakening — good short setup
-        elif 60 < rsi <= 70:
-            f3 = 5    # Still bullish — early short
+        if -2.2 <= dist_ema21_pct <= 0.0:
+            f3 = 15  # Prime sweet spot: retesting EMA21 resistance from below
+        elif 0.0 < dist_ema21_pct <= 2.0:
+            f3 = 12  # Relief rally to EMA21/50
+        elif -4.5 <= dist_ema21_pct < -2.2:
+            f3 = 8
+        elif dist_ema21_pct < -6.0:
+            f3 = 1   # Overextended dump — DO NOT SHORT THE BOTTOM
         else:
-            f3 = 0
-    factors["RSI_TrendAware"] = f3
+            f3 = 4
+    factors["Swing_Pullback_Value"] = f3
 
-    # ── Factor 4: MACD — dual-weight direction + strength (max 15 pts) ────────
+    # ── Factor 4: Multi-Day Momentum Alignment (max 15 pts) ───────────────────
     if side == "buy":
-        # Direction (8 pts): MACD line above signal
-        f4_dir = 8 if macd_line > signal_line else 0
-        # Histogram strength (7 pts): positive and growing
-        if histogram > 0:
-            f4_hist = min(7, histogram / max(abs(macd_line), 0.0001) * 7)
-        else:
-            f4_hist = max(-5, histogram / max(abs(macd_line), 0.0001) * 5)
-        f4 = max(0, f4_dir + f4_hist)
+        f4 = 0
+        if chg_24h > 0.8:
+            f4 += 8
+        elif chg_24h > 0.0:
+            f4 += 4
+        if chg_72h > 2.0:
+            f4 += 7
+        elif chg_72h > 0.0:
+            f4 += 3
     else:
-        f4_dir = 8 if macd_line < signal_line else 0
-        if histogram < 0:
-            f4_hist = min(7, abs(histogram) / max(abs(macd_line), 0.0001) * 7)
-        else:
-            f4_hist = max(-5, -histogram / max(abs(macd_line), 0.0001) * 5)
-        f4 = max(0, f4_dir + f4_hist)
-    factors["MACD_DualWeight"] = round(min(15, f4))
+        f4 = 0
+        if chg_24h < -0.8:
+            f4 += 8
+        elif chg_24h < 0.0:
+            f4 += 4
+        if chg_72h < -2.0:
+            f4 += 7
+        elif chg_72h < 0.0:
+            f4 += 3
+    factors["MultiDay_Momentum"] = min(15, f4)
 
-    # ── Factor 5: Bollinger Band — trend-aware (max 12 pts) ───────────────────
-    # In trending markets, riding the upper/lower band IS the trade
-    # BB width tells us if we're in trend (wide) or range (narrow)
-    bb_width_pct = (bb_upper - bb_lower) / bb_mid * 100
-    is_trending = bb_width_pct > 3.0   # Wide BB = trending market
-
+    # ── Factor 5: 4H MACD Swing Cycle (max 12 pts) ────────────────────────────
     if side == "buy":
-        if is_trending:
-            # Trend mode: price near upper band is bullish (not overbought)
-            if bb_pos > 0.6:
-                f5 = 12   # Riding upper band — strong trend
-            elif bb_pos > 0.4:
-                f5 = 8    # Middle-upper — decent
-            else:
-                f5 = 4    # Near lower — possible reversal entry
+        if macd_line > signal_line and histogram > 0:
+            f5 = 12  # MACD bull cross + accelerating green momentum
+        elif macd_line > signal_line:
+            f5 = 8
+        elif histogram > 0:
+            f5 = 5   # Histogram turning positive (early cycle)
         else:
-            # Range mode: buy near lower band (mean reversion)
-            if bb_pos < 0.3:
-                f5 = 12
-            elif bb_pos < 0.5:
-                f5 = 8
-            else:
-                f5 = 3    # Near upper in range = risky long
+            f5 = 0
     else:
-        if is_trending:
-            if bb_pos < 0.4:
-                f5 = 12   # Riding lower band — strong downtrend
-            elif bb_pos < 0.6:
-                f5 = 8
-            else:
-                f5 = 4
+        if macd_line < signal_line and histogram < 0:
+            f5 = 12  # MACD bear cross + accelerating red momentum
+        elif macd_line < signal_line:
+            f5 = 8
+        elif histogram < 0:
+            f5 = 5
         else:
-            if bb_pos > 0.7:
-                f5 = 12   # Near upper in range = good short
-            elif bb_pos > 0.5:
-                f5 = 8
-            else:
-                f5 = 3
-    factors["Bollinger_TrendAware"] = f5
+            f5 = 0
+    factors["MACD_4H_Cycle"] = f5
 
-    # ── Factor 6: Volatility Regime (max 10 pts) ──────────────────────────────
-    regime = _volatility_regime(atr_pct)
-    f6 = {"LOW": 5, "MED": 10, "HIGH": 7}[regime]
-    factors["Volatility_Regime"] = f6
-
-    # ── Factor 7: Fear & Greed Macro (max 5 pts) ──────────────────────────────
+    # ── Factor 6: 4H Swing RSI (max 10 pts) ───────────────────────────────────
     if side == "buy":
-        if 35 <= fg_value <= 70:
-            f7 = 5    # Healthy — not extreme in either direction
-        elif fg_value > 80:
-            f7 = 1    # Extreme greed = euphoria = reversal risk
+        if 44.0 <= rsi_4h <= 62.0:
+            f6 = 10  # Optimal swing accumulation band
+        elif 62.0 < rsi_4h <= 70.0:
+            f6 = 6   # Bullish but getting warm
+        elif 36.0 <= rsi_4h < 44.0:
+            f6 = 7   # Oversold pullback in uptrend
+        elif rsi_4h > 75.0:
+            f6 = 0   # Severely overbought — risk of swing reversal
+        else:
+            f6 = 2
+    else:
+        if 38.0 <= rsi_4h <= 56.0:
+            f6 = 10  # Optimal swing distribution band
+        elif 30.0 <= rsi_4h < 38.0:
+            f6 = 6
+        elif 56.0 < rsi_4h <= 64.0:
+            f6 = 7   # Relief rally in downtrend
+        elif rsi_4h < 25.0:
+            f6 = 0   # Severely oversold — risk of short squeeze
+        else:
+            f6 = 2
+    factors["RSI_4H_Swing"] = f6
+
+    # ── Factor 7: 4H Market Structure / Pivots (max 10 pts) ───────────────────
+    hh_ll = _check_higher_highs(c4h, side, lookback=8)
+    f7 = 10 if hh_ll else 0
+    factors["Structure_HigherLows"] = f7
+
+    # ── Factor 8: Macro Fear & Greed (max 5 pts) ──────────────────────────────
+    if side == "buy":
+        if 35 <= fg_value <= 75:
+            f8 = 5
+        elif fg_value > 75:
+            f8 = 2   # High greed caution
+        else:
+            f8 = 3
+    else:
+        if 25 <= fg_value <= 65:
+            f8 = 5
         elif fg_value < 25:
-            f7 = 4    # Extreme fear = buy opportunity (contrarian)
+            f8 = 2   # High fear caution
         else:
-            f7 = 3
-    else:
-        if 30 <= fg_value <= 65:
-            f7 = 5
-        elif fg_value < 20:
-            f7 = 1    # Extreme fear = bounce risk for shorts
-        else:
-            f7 = 3
-    factors["FearGreed_Macro"] = f7
-
-    # ── Factor 8: Price vs EMA50 Anchor (max 5 pts) ───────────────────────────
-    if side == "buy":
-        f8 = 5 if live > ema50 else 0
-    else:
-        f8 = 5 if live < ema50 else 0
-    factors["Price_vs_Anchor"] = f8
-
-    # ── Factor 9: Higher Highs / Lower Lows Bonus (max 10 pts) ───────────────
-    hh_ll = _check_higher_highs(closes, side, lookback=8)
-    f9 = 10 if hh_ll else 0
-    factors["HH_LL_Structure"] = f9
-
-    # ── Factor 10: Candle Confirmation Bonus (max 8 pts) ──────────────────────
-    # Rewards entries with confirming candles, penalizes contradicting ones
-    # Does NOT block — just adjusts the score
-    f10 = _candle_bonus(closes, opens, side)
-    factors["Candle_Confirmation"] = f10
+            f8 = 3
+    factors["FearGreed_Macro"] = f8
 
     total = sum(factors.values())
+
     return {
         "score": total,
         "factors": factors,
-        "ema9": ema9, "ema21": ema21, "ema50": ema50,
-        "rsi": rsi,
+        "ema9_4h": ema9_4h, "ema21_4h": ema21_4h, "ema50_4h": ema50_4h,
+        "ema20_1d": ema20_1d, "ema50_1d": ema50_1d,
+        "rsi_4h": rsi_4h,
         "macd_line": macd_line, "signal_line": signal_line, "histogram": histogram,
-        "bb_upper": bb_upper, "bb_mid": bb_mid, "bb_lower": bb_lower, "bb_pos": bb_pos,
-        "bb_width_pct": bb_width_pct,
-        "atr_pct": atr_pct, "volatility_regime": regime,
-        "chg_4h": chg_4h, "chg_8h": chg_8h, "chg_24h": chg_24h,
+        "atr_pct_4h": atr_pct_4h,
+        "chg_24h": chg_24h, "chg_72h": chg_72h,
+        "dist_ema21_pct": dist_ema21_pct,
         "fg_value": fg_value,
     }
 
 
-def _get_adaptive_tp_sl(atr_pct: float, regime: str, score: int) -> tuple[float, float]:
-    """ATR-adaptive TP/SL scaled by volatility regime and signal strength."""
-    base_tp = {"LOW": 1.2, "MED": 1.5, "HIGH": 1.8}[regime]
-    base_sl = {"LOW": 0.8, "MED": 1.0, "HIGH": 1.2}[regime]
-    # Stronger signals get wider TP target
-    score_bonus = 0.3 if score >= 80 else 0.15 if score >= 70 else 0
-    tp_pct = max(0.30, min(2.5, atr_pct * (base_tp + score_bonus)))
-    sl_pct = max(0.18, min(1.5, atr_pct * base_sl))
-    return round(tp_pct, 3), round(sl_pct, 3)
+def _get_swing_tp_sl(atr_pct_4h: float, score: int) -> tuple[float, float]:
+    """
+    Institutional Swing TP/SL Targets:
+      - Take Profit: 3.5% to 8.5% price target (based on 2.4x 4H ATR)
+      - Stop Loss:   1.8% to 3.5% stop buffer (based on 1.0x 4H ATR)
+      - Guaranteed Risk:Reward Ratio >= 2.0x (typically 2.2x - 2.8x)
+    """
+    # Base ATR multiplier
+    tp_mult = 2.4 if score >= 80 else 2.2
+    sl_mult = 1.0
+
+    tp_pct = max(3.5, min(8.5, atr_pct_4h * tp_mult))
+    sl_pct = max(1.8, min(3.5, atr_pct_4h * sl_mult))
+
+    # Enforce minimum 2.0x R:R
+    if tp_pct < sl_pct * 2.0:
+        tp_pct = round(sl_pct * 2.1, 2)
+
+    return round(tp_pct, 2), round(sl_pct, 2)
 
 
 def _get_symbol_bucket(symbol: str) -> str:
@@ -516,82 +479,68 @@ def _get_symbol_bucket(symbol: str) -> str:
     return "B"
 
 
-def _get_min_score(fg_value: int) -> int:
-    """Dynamic minimum score: raise bar in extreme greed, lower in fear."""
-    if fg_value >= 80:
-        return 68   # Extreme greed = euphoria = require stronger signal
-    elif fg_value >= 65:
-        return 62
-    elif fg_value <= 20:
-        return 55   # Extreme fear = contrarian entries allowed at lower bar
-    else:
-        return BASE_MIN_SCORE  # 58
-
-
-async def _analyze_symbol_v5(symbol: str, fg_value: int) -> dict | None:
+async def _analyze_symbol_swing(symbol: str, fg_value: int) -> dict | None:
     """
-    Full Aladdin v5 analysis: 10-factor gradient scoring.
-    Returns best-side signal dict or None if below minimum score.
+    Analyze symbol for institutional swing trade entry using 4H and 1D data.
     """
     try:
-        klines = await _get_klines(symbol, "1h", 60)
-        if len(klines) < 30:
+        k4h = await _get_klines(symbol, "4h", 60)
+        k1d = await _get_klines(symbol, "1d", 30)
+        if len(k4h) < 25 or len(k1d) < 10:
             return None
 
-        closes = [float(k[4]) for k in klines]
-        opens = [float(k[1]) for k in klines]
-        live_price = closes[-1]
+        c4h = [float(k[4]) for k in k4h]
+        o4h = [float(k[1]) for k in k4h]
+        c1d = [float(k[4]) for k in k1d]
+        live_price = c4h[-1]
 
-        min_score = _get_min_score(fg_value)
+        # Score both swing directions
+        bull = _score_symbol_swing(c4h, o4h, k4h, c1d, k1d, "buy", fg_value)
+        bear = _score_symbol_swing(c4h, o4h, k4h, c1d, k1d, "sell", fg_value)
 
-        # Score both sides (candle bonus included in scoring, not a gate)
-        bull = _score_symbol_v5(closes, opens, klines, "buy", fg_value)
-        bear = _score_symbol_v5(closes, opens, klines, "sell", fg_value)
-
-        # Pick strongest side above dynamic minimum threshold
-        if bull["score"] >= bear["score"] and bull["score"] >= min_score:
+        # Require minimum swing conviction (60/107)
+        if bull["score"] >= bear["score"] and bull["score"] >= BASE_MIN_SWING_SCORE:
             chosen = bull
             side = "buy"
-            regime_label = "BULL_ALADDIN_V5"
-        elif bear["score"] > bull["score"] and bear["score"] >= min_score:
+            regime = "BULL_SWING_4H"
+        elif bear["score"] > bull["score"] and bear["score"] >= BASE_MIN_SWING_SCORE:
             chosen = bear
             side = "sell"
-            regime_label = "BEAR_ALADDIN_V5"
+            regime = "BEAR_SWING_4H"
         else:
             return None
 
         score = chosen["score"]
-        atr_pct = chosen["atr_pct"]
-        vol_regime = chosen["volatility_regime"]
-        tp_pct, sl_pct = _get_adaptive_tp_sl(atr_pct, vol_regime, score)
+        atr_pct = chosen["atr_pct_4h"]
+        tp_pct, sl_pct = _get_swing_tp_sl(atr_pct, score)
         rr = round(tp_pct / sl_pct, 2)
-        confidence = round(min(0.96, 0.60 + score / 230), 2)
+        confidence = round(min(0.95, 0.60 + score / 200), 2)
 
         evidence = [
-            f"{symbol}: Aladdin v5 Score {score}/113 ({side.upper()}) | Min={min_score} | Vol={vol_regime}",
-            f"{symbol}: EMA {round(chosen['ema9'],2)}/{round(chosen['ema21'],2)}/{round(chosen['ema50'],2)} | RSI {round(chosen['rsi'],1)}",
-            f"{symbol}: MACD {round(chosen['macd_line'],4)} / Sig {round(chosen['signal_line'],4)} | Hist {round(chosen['histogram'],4)}",
-            f"{symbol}: BB {round(chosen['bb_pos']*100,1)}% (width {round(chosen['bb_width_pct'],2)}%) | 4h{chosen['chg_4h']:+.2f}% 24h{chosen['chg_24h']:+.2f}%",
-            f"{symbol}: F&G={fg_value} | TP+{tp_pct:.2f}% SL-{sl_pct:.2f}% RR={rr}x | Conf={confidence}",
+            f"{symbol}: Aladdin Swing Score {score}/107 ({side.upper()}) | Mode: Swing Trader",
+            f"{symbol}: 4H EMA Stack {round(chosen['ema9_4h'],1)}/{round(chosen['ema21_4h'],1)}/{round(chosen['ema50_4h'],1)} | 1D EMA20 {round(chosen['ema20_1d'],1)}",
+            f"{symbol}: Pullback Gap {chosen['dist_ema21_pct']:+.2f}% | 4H RSI {round(chosen['rsi_4h'],1)} | MACD {round(chosen['macd_line'],2)}",
+            f"{symbol}: 24h{chosen['chg_24h']:+.2f}% 72h{chosen['chg_72h']:+.2f}% | 4H ATR {atr_pct:.2f}%",
+            f"{symbol}: Swing TP +{tp_pct:.2f}% | SL -{sl_pct:.2f}% | R:R = {rr}x | Conf = {confidence}",
         ]
 
         return {
             "symbol": symbol, "side": side, "live_price": live_price,
-            "regime": regime_label, "confidence": confidence, "evidence": evidence,
+            "regime": regime, "confidence": confidence, "evidence": evidence,
             "tp_pct": tp_pct, "sl_pct": sl_pct, "rr_ratio": rr,
-            "score": score, "min_score": min_score,
+            "score": score,
             "bull_score": bull["score"], "bear_score": bear["score"],
-            "factors": chosen["factors"], "vol_regime": vol_regime, "atr_pct": atr_pct,
+            "factors": chosen["factors"], "atr_pct": atr_pct,
         }
     except Exception as e:
-        logger.debug("Aladdin v5 analysis error for %s: %s", symbol, e)
+        logger.debug("Swing analysis error for %s: %s", symbol, e)
         return None
 
 
 @router.post("/tick")
 @router.get("/tick")
 async def run_scan_tick(request: Request):
-    """Aladdin v5 Expert Trading Engine — full scan cycle."""
+    """Aladdin v6 Swing Trading Engine — execution cycle."""
     import time as _time
 
     portfolio = request.app.state.portfolio
@@ -603,17 +552,15 @@ async def run_scan_tick(request: Request):
         return {"status": "throttled", "message": "Scan runs every 10s"}
     _scan_state["last_scan"] = now
 
-    # ── Pre-warm ALL klines in parallel (fixes Vercel 10s timeout) ───────────
-    # All 6 fetches run concurrently: ~1-2s total vs 12s sequential
-    await asyncio.gather(*[_get_klines(s, "1h", 60) for s in SYMBOLS], return_exceptions=True)
+    # ── Pre-warm ALL 4H and 1D klines in parallel (fast ~1.5s total) ──────────
+    prefetch_tasks = []
+    for s in SYMBOLS:
+        prefetch_tasks.append(_get_klines(s, "4h", 60))
+        prefetch_tasks.append(_get_klines(s, "1d", 30))
+    await asyncio.gather(*prefetch_tasks, return_exceptions=True)
 
-    # Diagnostics: how many symbols got kline data?
-    klines_ok = [s for s in SYMBOLS if len(_kline_cache.get(f"{s}_1h_60", {}).get("data", [])) >= 10]
+    klines_ok = [s for s in SYMBOLS if len(_kline_cache.get(f"{s}_4h_60", {}).get("data", [])) >= 10]
     klines_failed = [s for s in SYMBOLS if s not in klines_ok]
-    if klines_failed:
-        logger.warning("Klines FAILED for: %s", klines_failed)
-
-    settings = request.app.state.settings
 
     try:
         from crypto_trading_desk.core.state import load_state
@@ -642,7 +589,7 @@ async def run_scan_tick(request: Request):
     fg_label = fg["label"]
 
     # ── 1. Portfolio Heat Guard ───────────────────────────────────────────────
-    # Don't open new trades if unrealized losses exceed $15
+    # In swing trading, allow normal breathing room: halt new entries if open loss exceeds -$18
     unrealized_pnl = 0.0
     for sym, qty in portfolio.positions.items():
         if qty != 0:
@@ -653,9 +600,9 @@ async def run_scan_tick(request: Request):
                 unrealized_pnl += margin * leverage * diff
             except Exception:
                 pass
-    portfolio_heat_ok = unrealized_pnl > -15.0
+    portfolio_heat_ok = unrealized_pnl > -18.0
 
-    # ── 2. Monitor open positions — Granular Trailing Stop + TP/SL ───────────
+    # ── 2. Monitor Open Positions (3-Stage Swing Trailing Ratchet) ─────────────
     for sym, qty in list(portfolio.positions.items()):
         if qty == 0:
             continue
@@ -665,44 +612,48 @@ async def run_scan_tick(request: Request):
             continue
 
         entry_p = portfolio._entry_prices.get(sym, live_p)
-        stored = portfolio._entry_tp_sl.get(sym, (0.008, 0.005))
-        tp_threshold = stored[0] / 100
-        sl_threshold = stored[1] / 100
+        stored = portfolio._entry_tp_sl.get(sym, (4.5, 2.2))
+        tp_threshold = stored[0] / 100.0   # e.g. 0.045 (4.5%)
+        sl_threshold = stored[1] / 100.0   # e.g. 0.022 (2.2%)
 
         diff = (live_p - entry_p) / entry_p if qty > 0 else (entry_p - live_p) / entry_p
         realized_pnl = margin * leverage * diff
         pnl_pct = (realized_pnl / margin) * 100
 
-        # Granular trailing stop: every 25% of TP progress → tighten SL by 0.3x
+        # Swing Trailing Ratchet:
+        # Stage 1: Profit reaches +2.0% (or 45% of TP) -> Move SL to Breakeven +0.2%
+        # Stage 2: Profit reaches +4.0% (or 70% of TP) -> Trail SL to lock in 50% of gain
+        # Stage 3: Profit reaches 85% of TP           -> Trail SL to lock in 75% of gain
         trail_level = portfolio._trailing_state.get(sym, 0)
-        progress = diff / tp_threshold if tp_threshold > 0 else 0
 
-        if progress >= 0.75 and trail_level < 3:
-            # At 75%+ of TP: trail SL to lock 60% of gain
-            sl_threshold = diff * 0.40
+        if diff >= tp_threshold * 0.85 and trail_level < 3:
+            sl_threshold = -(diff * 0.75)  # Lock in 75% of peak profit
             portfolio._trailing_state[sym] = 3
-            actions_taken.append(f"TRAIL_STOP3 {sym}: SL locks 60% gain at +{diff*100:.2f}%")
-        elif progress >= 0.50 and trail_level < 2:
-            # At 50%+ of TP: move SL to breakeven +0.1%
-            sl_threshold = 0.001
+            actions_taken.append(f"SWING_TRAIL3 {sym}: Locked 75% gain (SL at +{abs(sl_threshold)*100:.2f}%)")
+        elif (diff >= tp_threshold * 0.70 or diff >= 0.040) and trail_level < 2:
+            sl_threshold = -(diff * 0.50)  # Lock in 50% of peak profit
             portfolio._trailing_state[sym] = 2
-            actions_taken.append(f"TRAIL_STOP2 {sym}: SL moved to breakeven")
-        elif progress >= 0.25 and trail_level < 1:
+            actions_taken.append(f"SWING_TRAIL2 {sym}: Locked 50% gain (SL at +{abs(sl_threshold)*100:.2f}%)")
+        elif (diff >= tp_threshold * 0.45 or diff >= 0.020) and trail_level < 1:
+            sl_threshold = -0.002          # Breakeven + 0.2% buffer
             portfolio._trailing_state[sym] = 1
-            actions_taken.append(f"TRAIL_STOP1 {sym}: Progress 25% — monitoring")
+            actions_taken.append(f"SWING_TRAIL1 {sym}: SL moved to Breakeven (+0.2%) — trade is now RISK-FREE")
 
         closed_reason = None
         if diff >= tp_threshold:
-            closed_reason = f"Aladdin TakeProfit (+{diff*100:.2f}%)"
-        elif diff <= -sl_threshold:
-            closed_reason = f"Aladdin StopLoss ({diff*100:.2f}%)"
+            closed_reason = f"Aladdin Swing TakeProfit (+{diff*100:.2f}%)"
+        elif sl_threshold < 0 and diff <= abs(sl_threshold):
+            # Trailed stop triggered in profit
+            closed_reason = f"Aladdin Swing Trailing Profit (+{diff*100:.2f}%)"
+        elif sl_threshold > 0 and diff <= -sl_threshold:
+            closed_reason = f"Aladdin Swing StopLoss ({diff*100:.2f}%)"
 
         if closed_reason:
             portfolio.positions[sym] = 0
             portfolio.realized_pnl += realized_pnl
             portfolio._trailing_state.pop(sym, None)
             portfolio._entry_tp_sl.pop(sym, None)
-            sl_p = entry_p * (1 - sl_threshold) if qty > 0 else entry_p * (1 + sl_threshold)
+            sl_p = entry_p * (1 - abs(sl_threshold)) if qty > 0 else entry_p * (1 + abs(sl_threshold))
             tp_p = entry_p * (1 + tp_threshold) if qty > 0 else entry_p * (1 - tp_threshold)
             portfolio.closed_trades.append({
                 "trade_id": str(uuid.uuid4())[:8],
@@ -718,9 +669,9 @@ async def run_scan_tick(request: Request):
                 "closed_by": closed_reason,
             })
             actions_taken.append(f"CLOSED {sym} | {closed_reason} | PnL: ${realized_pnl:.2f}")
-            logger.info("Aladdin v5 closed %s | %s | PnL $%.2f", sym, closed_reason, realized_pnl)
+            logger.info("Aladdin Swing closed %s | %s | PnL $%.2f", sym, closed_reason, realized_pnl)
 
-    # ── 3. Open new positions ─────────────────────────────────────────────────
+    # ── 3. Open New Swing Positions ───────────────────────────────────────────
     active_count = sum(1 for q in portfolio.positions.values() if q != 0)
     if active_count < 3 and portfolio_heat_ok:
         available = [s for s in SYMBOLS if portfolio.positions.get(s, 0) == 0]
@@ -732,29 +683,31 @@ async def run_scan_tick(request: Request):
             if sum(1 for q in portfolio.positions.values() if q != 0) >= 3:
                 break
 
-            # Correlation guard
+            # Correlation guard: max 1 per bucket
             bucket = _get_symbol_bucket(symbol)
             bucket_held = sum(1 for s in CORRELATION_BUCKETS.get(bucket, [])
                               if portfolio.positions.get(s, 0) != 0)
             if bucket_held >= MAX_PER_BUCKET.get(bucket, 1):
-                actions_taken.append(f"CORR_GUARD {symbol}: bucket {bucket} full ({bucket_held}/{MAX_PER_BUCKET[bucket]})")
+                actions_taken.append(f"CORR_GUARD {symbol}: Bucket {bucket} full ({bucket_held}/{MAX_PER_BUCKET[bucket]})")
                 continue
 
-            signal = await _analyze_symbol_v5(symbol, fg_value)
+            signal = await _analyze_symbol_swing(symbol, fg_value)
             if signal is None:
-                # Quick score debug using cached klines (no extra API call)
+                # Quick debug scores
                 score_info = ""
                 try:
-                    k = _kline_cache.get(f"{symbol}_1h_60", {}).get("data", [])
-                    if k:
-                        cl = [float(x[4]) for x in k]
-                        op = [float(x[1]) for x in k]
-                        b = _score_symbol_v5(cl, op, k, "buy", fg_value)
-                        br = _score_symbol_v5(cl, op, k, "sell", fg_value)
-                        score_info = f" [Bull={b['score']} Bear={br['score']} Min={_get_min_score(fg_value)}]"
+                    k4 = _kline_cache.get(f"{symbol}_4h_60", {}).get("data", [])
+                    k1 = _kline_cache.get(f"{symbol}_1d_30", {}).get("data", [])
+                    if k4 and k1:
+                        c4 = [float(x[4]) for x in k4]
+                        o4 = [float(x[1]) for x in k4]
+                        c1 = [float(x[4]) for x in k1]
+                        b = _score_symbol_swing(c4, o4, k4, c1, k1, "buy", fg_value)
+                        br = _score_symbol_swing(c4, o4, k4, c1, k1, "sell", fg_value)
+                        score_info = f" [Bull={b['score']} Bear={br['score']} Min={BASE_MIN_SWING_SCORE}]"
                 except Exception:
                     pass
-                actions_taken.append(f"SKIPPED {symbol}: score below bar{score_info}")
+                actions_taken.append(f"SKIPPED {symbol}: score below swing threshold{score_info}")
                 continue
 
             side = signal["side"]
@@ -763,12 +716,13 @@ async def run_scan_tick(request: Request):
             tp_pct = signal["tp_pct"]
             sl_pct = signal["sl_pct"]
 
-            # Dynamic notional: $400/$500/$600/$700 based on score tiers
-            if score >= 90:
-                notional = 700.0
-            elif score >= 80:
-                notional = 600.0
-            elif score >= 70:
+            # Dynamic Sizing for Swings:
+            # Score >= 85: $650 notional
+            # Score 75-84: $500 notional
+            # Score 60-74: $400 notional
+            if score >= 85:
+                notional = 650.0
+            elif score >= 75:
                 notional = 500.0
             else:
                 notional = 400.0
@@ -790,14 +744,12 @@ async def run_scan_tick(request: Request):
             )
             await event_bus.publish(proposal)
             actions_taken.append(
-                f"OPENED {side.upper()} {symbol} @ ${live_price:,.4f} | "
-                f"Score={score}/105 | TP+{tp_pct:.2f}% SL-{sl_pct:.2f}% RR={signal['rr_ratio']}x | "
+                f"OPENED SWING {side.upper()} {symbol} @ ${live_price:,.2f} | "
+                f"Score={score}/107 | Swing TP+{tp_pct:.2f}% SL-{sl_pct:.2f}% RR={signal['rr_ratio']}x | "
                 f"Notional=${notional:.0f} | F&G={fg_value}({fg_label})"
             )
-            logger.info("Aladdin v5 opened %s %s @ $%.4f | score=%d | tp=%.3f%% sl=%.3f%%",
+            logger.info("Aladdin Swing opened %s %s @ $%.2f | score=%d | tp=%.2f%% sl=%.2f%%",
                         side.upper(), symbol, live_price, score, tp_pct, sl_pct)
-    elif not portfolio_heat_ok:
-        actions_taken.append(f"HEAT_GUARD: Open unrealized PnL = ${unrealized_pnl:.2f} — no new entries until recovery")
 
     try:
         from crypto_trading_desk.core.state import save_state
@@ -807,12 +759,13 @@ async def run_scan_tick(request: Request):
 
     return {
         "status": "scanned",
+        "engine": "Aladdin_v6_SwingTrader",
+        "timeframes": "4H Primary / 1D Macro Confluence",
         "actions": actions_taken,
         "active_positions": sum(1 for q in portfolio.positions.values() if q != 0),
         "unrealized_pnl": round(unrealized_pnl, 2),
-        "engine": "Aladdin_v5_Expert",
         "fear_greed": {"value": fg_value, "label": fg_label},
-        "min_score_bar": _get_min_score(fg_value),
+        "min_score_bar": BASE_MIN_SWING_SCORE,
         "klines_ok": len(klines_ok),
         "klines_failed": klines_failed,
     }
