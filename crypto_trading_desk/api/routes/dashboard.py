@@ -60,8 +60,18 @@ async def get_dashboard(request: Request):
                 "current_price": round(live_price, 2),
                 "liq_price": round(liq_price, 2),
                 "distance_to_liq": f"{distance_to_liq_pct:.1f}%",
-                "stop_loss": round(entry_price * 0.996 if qty > 0 else entry_price * 1.004, 2),
-                "take_profit": round(entry_price * 1.006 if qty > 0 else entry_price * 0.994, 2),
+                "stop_loss": round(
+                    entry_price * (1.0 - getattr(portfolio, "_entry_tp_sl", {}).get(sym, (5.0, 2.5))[1] / 100.0)
+                    if qty > 0 else
+                    entry_price * (1.0 + getattr(portfolio, "_entry_tp_sl", {}).get(sym, (5.0, 2.5))[1] / 100.0),
+                    2
+                ),
+                "take_profit": round(
+                    entry_price * (1.0 + getattr(portfolio, "_entry_tp_sl", {}).get(sym, (5.0, 2.5))[0] / 100.0)
+                    if qty > 0 else
+                    entry_price * (1.0 - getattr(portfolio, "_entry_tp_sl", {}).get(sym, (5.0, 2.5))[0] / 100.0),
+                    2
+                ),
                 "unrealized_pnl": round(unrealized_pnl, 2),
                 "pnl_pct": round(pnl_pct, 2)
             })
