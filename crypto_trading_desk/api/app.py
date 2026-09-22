@@ -135,13 +135,24 @@ def create_app() -> FastAPI:
     app.include_router(scan.router, prefix="/api/scan", tags=["scan"])
 
     from fastapi.responses import HTMLResponse
-    from crypto_trading_desk.api.templates.template import DASHBOARD_HTML
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/dashboard", response_class=HTMLResponse)
     async def get_ui_dashboard():
+        html_content = None
+        html_file = os.path.join(os.path.dirname(__file__), "templates", "dashboard.html")
+        if os.path.exists(html_file):
+            try:
+                with open(html_file, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+            except Exception:
+                pass
+        if not html_content:
+            from crypto_trading_desk.api.templates.template import DASHBOARD_HTML
+            html_content = DASHBOARD_HTML
+
         return HTMLResponse(
-            content=DASHBOARD_HTML,
+            content=html_content,
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
                 "Pragma": "no-cache",
