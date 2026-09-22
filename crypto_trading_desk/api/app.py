@@ -140,7 +140,14 @@ def create_app() -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     @app.get("/dashboard", response_class=HTMLResponse)
     async def get_ui_dashboard():
-        return HTMLResponse(content=DASHBOARD_HTML)
+        return HTMLResponse(
+            content=DASHBOARD_HTML,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
 
     @app.get("/health")
     async def health():

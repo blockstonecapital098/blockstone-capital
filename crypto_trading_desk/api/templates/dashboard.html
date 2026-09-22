@@ -216,7 +216,23 @@
             margin-top: 6px;
         }
 
-        /* Tables */
+        /* Card & Table Containers */
+        .card {
+            background: #0b1220;
+            border: 2px solid #233558;
+            border-radius: 14px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        }
+
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin-top: 8px;
+        }
+
         .positions-card {
             background: #0b1220;
             border: 2px solid #233558;
@@ -426,6 +442,65 @@
 
         .signal-agent { font-weight: 800; font-size: 0.95rem; color: var(--neon-cyan); }
         .signal-evidence { font-size: 0.85rem; color: var(--text-sub); font-weight: 600; line-height: 1.4; }
+
+        /* Mobile & Tablet Responsiveness */
+        @media (max-width: 900px) {
+            body {
+                padding: 12px 10px;
+            }
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 14px;
+            }
+            .header-actions {
+                width: 100%;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .header-actions button, .autopilot-pill {
+                font-size: 0.8rem;
+                padding: 8px 12px;
+                flex: 1 1 auto;
+                justify-content: center;
+            }
+            .kpi-grid {
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 10px;
+            }
+            .kpi-card:last-child {
+                grid-column: span 2;
+            }
+            .kpi-val {
+                font-size: 1.45rem;
+            }
+            .positions-card, .card {
+                padding: 14px 12px;
+                border-radius: 10px;
+            }
+            .positions-card .card-title, .card-title {
+                font-size: 1.05rem;
+            }
+            .binance-strip {
+                padding: 10px 14px;
+                font-size: 0.82rem;
+            }
+            .chart-container {
+                height: 280px;
+            }
+        }
+        @media (max-width: 500px) {
+            .kpi-grid {
+                grid-template-columns: 1fr !important;
+            }
+            .kpi-card:last-child {
+                grid-column: span 1;
+            }
+            .brand-text h1 {
+                font-size: 1.25rem;
+            }
+        }
     </style>
 </head>
 <body>
@@ -509,28 +584,30 @@
             <div class="card-title">💼 Live Running Positions · Real-Time Leverage & Liquidation Monitor</div>
             <button class="btn-kill" style="padding: 8px 18px; font-size: 0.9rem; font-weight: 900;" onclick="closeAllPositions()">Close All Positions</button>
         </div>
-        <table class="positions-table">
-            <thead>
-                <tr>
-                    <th>Symbol</th>
-                    <th>Side</th>
-                    <th>Leverage</th>
-                    <th>Margin</th>
-                    <th>Entry Price</th>
-                    <th>Mark Price</th>
-                    <th>Est. Liq Price</th>
-                    <th>Distance to Liq</th>
-                    <th>SL / TP</th>
-                    <th>Unrealized P&L</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-            <tbody id="positionsBody">
-                <tr>
-                    <td colspan="11" class="empty-state">No open positions. Autonomous Trader is scanning Binance futures for setups...</td>
-                </tr>
-            </tbody>
-        </table>
+        <div class="table-responsive">
+            <table class="positions-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Leverage</th>
+                        <th>Margin</th>
+                        <th>Entry Price</th>
+                        <th>Mark Price</th>
+                        <th>Est. Liq Price</th>
+                        <th>Distance to Liq</th>
+                        <th>SL / TP</th>
+                        <th>Unrealized P&L</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="positionsBody">
+                    <tr>
+                        <td colspan="11" class="empty-state">No open positions. Autonomous Trader is scanning for setups...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <!-- Closed Trades & Realized P&L Ledger (NEW) -->
@@ -539,25 +616,27 @@
             <div class="card-title">📜 Closed Trades & Realized P&L History Log</div>
             <span style="font-size: 0.85rem; color: var(--neon-green); font-weight: 800;">● PKT Local Time (12-Hour AM/PM)</span>
         </div>
-        <table class="table">
-            <thead>
-                <tr>
-                    <th>CLOSED DATE & TIME (PKT)</th>
-                    <th>SYMBOL</th>
-                    <th>SIDE</th>
-                    <th>ENTRY PRICE</th>
-                    <th>EXIT PRICE</th>
-                    <th>SL / TP</th>
-                    <th>REALIZED P&L</th>
-                    <th>CLOSED BY / REASON</th>
-                </tr>
-            </thead>
-            <tbody id="closedTradesBody">
-                <tr>
-                    <td colspan="8" class="empty-state">No closed trades recorded yet. Close a position to view full entry, exit, SL/TP, and P&L history!</td>
-                </tr>
-            </tbody>
-        </table>
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>CLOSED DATE & TIME (PKT)</th>
+                        <th>SYMBOL</th>
+                        <th>SIDE</th>
+                        <th>ENTRY PRICE</th>
+                        <th>EXIT PRICE</th>
+                        <th>SL / TP</th>
+                        <th>REALIZED P&L</th>
+                        <th>CLOSED BY / REASON</th>
+                    </tr>
+                </thead>
+                <tbody id="closedTradesBody">
+                    <tr>
+                        <td colspan="8" class="empty-state">No closed trades recorded yet. Close a position to view full entry, exit, SL/TP, and P&L history!</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <!-- Dual Column: Chart + Signals -->
@@ -611,24 +690,26 @@
             <div class="card-title">📋 OMS Order Execution History</div>
             <span style="font-size: 0.85rem; color: var(--text-sub); font-weight: 800;">● PKT Date & Time</span>
         </div>
-        <table class="table">
-            <thead>
-                <tr>
-                    <th>DATE & TIME (PKT)</th>
-                    <th>ORDER ID</th>
-                    <th>SYMBOL</th>
-                    <th>SIDE</th>
-                    <th>QUANTITY</th>
-                    <th>NOTIONAL</th>
-                    <th>STATUS</th>
-                </tr>
-            </thead>
-            <tbody id="ordersBody">
-                <tr>
-                    <td colspan="7" class="empty-state">No order history yet.</td>
-                </tr>
-            </tbody>
-        </table>
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>DATE & TIME (PKT)</th>
+                        <th>ORDER ID</th>
+                        <th>SYMBOL</th>
+                        <th>SIDE</th>
+                        <th>QUANTITY</th>
+                        <th>NOTIONAL</th>
+                        <th>STATUS</th>
+                    </tr>
+                </thead>
+                <tbody id="ordersBody">
+                    <tr>
+                        <td colspan="7" class="empty-state">No order history yet.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <script>
@@ -637,30 +718,53 @@
         let lastOrdersHash = "";
         let lastClosedHash = "";
 
+        function parseDateSafe(dateStr) {
+            if (!dateStr) return 0;
+            const t = new Date(dateStr).getTime();
+            if (!isNaN(t) && t > 0) return t;
+            try {
+                const parts = String(dateStr).match(/([A-Za-z]+)\s+(\d+),\s+(\d{4})\s+(\d+):(\d+):(\d+)\s*(AM|PM)/i);
+                if (parts) {
+                    const months = {jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11};
+                    const m = months[parts[1].toLowerCase().slice(0, 3)] || 0;
+                    const d = parseInt(parts[2], 10);
+                    const y = parseInt(parts[3], 10);
+                    let h = parseInt(parts[4], 10);
+                    const min = parseInt(parts[5], 10);
+                    const s = parseInt(parts[6], 10);
+                    if (parts[7].toUpperCase() === 'PM' && h < 12) h += 12;
+                    if (parts[7].toUpperCase() === 'AM' && h === 12) h = 0;
+                    return new Date(y, m, d, h, min, s).getTime();
+                }
+            } catch (e) {}
+            return 0;
+        }
+
         async function fetchDashboard() {
             try {
-                // 1. Fetch portfolio & positions
-                const res = await fetch('/api/dashboard/');
+                const ts = Date.now();
+                // 1. Fetch portfolio & positions (cache-busted for Chrome/Mobile)
+                const res = await fetch('/api/dashboard/?_t=' + ts);
                 if (res.ok) {
                     const data = await res.json();
                     
-                    const equity = data.equity || 1000.0;
-                    const liveMarketValue = data.live_market_value_portfolio || equity;
-                    const totalPnl = data.total_unrealized_pnl || 0.0;
-                    const livePnlPct = data.live_pnl_pct || 0.0;
+                    const equity = (data.base_capital !== undefined ? data.base_capital : data.equity) || 1000.0;
+                    const liveMarketValue = (data.live_market_value_portfolio !== undefined ? data.live_market_value_portfolio : data.equity) || equity;
+                    const totalPnl = data.total_net_pnl !== undefined ? data.total_net_pnl : (data.total_unrealized_pnl || 0.0);
+                    const livePnlPct = data.total_pnl_pct !== undefined ? data.total_pnl_pct : (data.live_pnl_pct || 0.0);
 
-                    document.getElementById('kpiEquity').innerText = '$' + equity.toLocaleString('en-US', {minimumFractionDigits: 2});
+                    document.getElementById('kpiEquity').innerText = '$' + Number(equity).toLocaleString('en-US', {minimumFractionDigits: 2});
                     
                     const liveValElem = document.getElementById('kpiLiveMarketValue');
                     const subPnlElem = document.getElementById('kpiLivePnLSub');
-                    liveValElem.innerText = '$' + liveMarketValue.toLocaleString('en-US', {minimumFractionDigits: 2});
+                    liveValElem.innerText = '$' + Number(liveMarketValue).toLocaleString('en-US', {minimumFractionDigits: 2});
                     liveValElem.style.color = totalPnl >= 0 ? 'var(--neon-green)' : 'var(--neon-red)';
                     
-                    subPnlElem.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)} (${livePnlPct >= 0 ? '+' : ''}${livePnlPct.toFixed(2)}%) Live PnL`;
+                    subPnlElem.innerText = `${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)} (${livePnlPct >= 0 ? '+' : ''}${Number(livePnlPct).toFixed(2)}%) Live PnL`;
                     subPnlElem.style.color = totalPnl >= 0 ? 'var(--neon-green)' : 'var(--neon-red)';
 
-                    document.getElementById('kpiExposure').innerText = '$' + (data.total_exposure || 0.0).toLocaleString('en-US', {minimumFractionDigits: 2});
-                    document.getElementById('kpiDrawdown').innerHTML = (data.drawdown_pct || 0).toFixed(2) + '% <span style="font-size: 0.82rem; color: var(--text-sub);">/ 15%</span>';
+                    document.getElementById('kpiExposure').innerText = '$' + (Number(data.total_exposure) || 0.0).toLocaleString('en-US', {minimumFractionDigits: 2});
+                    document.getElementById('kpiDrawdown').innerHTML = (Number(data.drawdown_pct) || 0).toFixed(2) + '% <span style="font-size: 0.82rem; color: var(--text-sub);">/ 15%</span>';
                     document.getElementById('kpiPositions').innerText = data.positions_count || 0;
 
                     const newPosHash = JSON.stringify(data.positions);
@@ -674,13 +778,13 @@
                                     <td><span class="${p.side === 'LONG' ? 'tag-long-lg' : 'tag-short-lg'}">${p.side}</span></td>
                                     <td><span class="tag-lev-lg">${p.leverage}</span></td>
                                     <td style="color: #ffffff; font-weight: 800;">${p.margin_used}</td>
-                                    <td style="color: #ffffff;">$${p.entry_price.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                    <td style="color: #ffffff; font-weight: 900;">$${p.current_price.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                    <td style="color: var(--neon-red); font-weight: 900; font-size: 1.1rem;">$${p.liq_price.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
-                                    <td style="color: var(--neon-cyan); font-weight: 900;">${p.distance_to_liq}</td>
+                                    <td style="color: #ffffff;">$${(Number(p.entry_price) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                    <td style="color: #ffffff; font-weight: 900;">$${(Number(p.current_price) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                    <td style="color: var(--neon-red); font-weight: 900; font-size: 1.1rem;">$${(Number(p.liq_price) || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                    <td style="color: var(--neon-cyan); font-weight: 900;">${p.distance_to_liq || 'N/A'}</td>
                                     <td style="color: #cbd5e1; font-size: 0.92rem;">$${p.stop_loss} / $${p.take_profit}</td>
-                                    <td class="${p.unrealized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}" style="font-size: 1.15rem;">
-                                        ${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)} (${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(1)}%)
+                                    <td class="${(Number(p.unrealized_pnl) || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}" style="font-size: 1.15rem;">
+                                        ${(Number(p.unrealized_pnl) || 0) >= 0 ? '+' : ''}$${(Number(p.unrealized_pnl) || 0).toFixed(2)} (${(Number(p.pnl_pct) || 0) >= 0 ? '+' : ''}${(Number(p.pnl_pct) || 0).toFixed(1)}%)
                                     </td>
                                     <td><button class="btn-kill" style="padding: 6px 16px; font-size: 0.85rem; font-weight: 900;" onclick="closeAllPositions()">Close</button></td>
                                 </tr>
@@ -691,8 +795,8 @@
                     }
                 }
 
-                // 2. Fetch Closed Trades History (with local persistent cache to prevent history loss across server restarts)
-                const closedRes = await fetch('/api/trades/closed');
+                // 2. Fetch Closed Trades History (cache-busted for Chrome/Mobile)
+                const closedRes = await fetch('/api/trades/closed?_t=' + ts);
                 if (closedRes.ok) {
                     const incomingTrades = await closedRes.json();
                     let cachedTrades = [];
@@ -716,10 +820,10 @@
                     }
                     const mergedTrades = Array.from(tradeMap.values());
 
-                    // Sort descending: newest closed trade first (Sep 16 → Sep 14 → Sep 11 → ...)
+                    // Robust cross-browser descending sort: newest closed trade first
                     mergedTrades.sort((a, b) => {
-                        const dateA = new Date(a.closed_at).getTime() || 0;
-                        const dateB = new Date(b.closed_at).getTime() || 0;
+                        const dateA = parseDateSafe(a.closed_at);
+                        const dateB = parseDateSafe(b.closed_at);
                         return dateB - dateA || (b.trade_id || '').localeCompare(a.trade_id || '');
                     });
 
@@ -752,10 +856,8 @@
                     }
                 }
 
-
-
-                // 3. Fetch OMS Orders History
-                const tradesRes = await fetch('/api/trades/');
+                // 3. Fetch OMS Orders History (cache-busted for Chrome/Mobile)
+                const tradesRes = await fetch('/api/trades/?_t=' + ts);
                 if (tradesRes.ok) {
                     const orders = await tradesRes.json();
                     const newOrdHash = JSON.stringify(orders);
@@ -778,23 +880,23 @@
                     }
                 }
 
-                // 4. Fetch Binance Tickers
-                const btcRes = await fetch('/api/binance/ticker?symbol=BTC/USDT');
+                // 4. Fetch Binance Tickers (cache-busted for Chrome/Mobile)
+                const btcRes = await fetch('/api/binance/ticker?symbol=BTC/USDT&_t=' + ts);
                 if (btcRes.ok) {
                     const t = await btcRes.json();
                     if (t.last) {
-                        document.getElementById('btcPrice').innerText = '$' + t.last.toLocaleString('en-US', {minimumFractionDigits: 2});
+                        document.getElementById('btcPrice').innerText = '$' + Number(t.last).toLocaleString('en-US', {minimumFractionDigits: 2});
                         const chg = t.change24h_pct || 0;
-                        document.getElementById('btcChange').innerText = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+                        document.getElementById('btcChange').innerText = (chg >= 0 ? '+' : '') + Number(chg).toFixed(2) + '%';
                         document.getElementById('btcChange').style.color = chg >= 0 ? 'var(--neon-green)' : 'var(--neon-red)';
                     }
                 }
 
-                const ethRes = await fetch('/api/binance/ticker?symbol=ETH/USDT');
+                const ethRes = await fetch('/api/binance/ticker?symbol=ETH/USDT&_t=' + ts);
                 if (ethRes.ok) {
                     const t2 = await ethRes.json();
                     if (t2.last) {
-                        document.getElementById('ethPrice').innerText = '$' + t2.last.toLocaleString('en-US', {minimumFractionDigits: 2});
+                        document.getElementById('ethPrice').innerText = '$' + Number(t2.last).toLocaleString('en-US', {minimumFractionDigits: 2});
                     }
                 }
             } catch (e) {
